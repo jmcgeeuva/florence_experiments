@@ -20,9 +20,13 @@ def main():
 
     df = pd.read_csv('detailed_captions.csv', header=None, names=['filepath', 'caption_data'], engine='python')
 
-    for index, row in df.iterrows():
+    for i, (index, row) in enumerate(df.iterrows()):
+        if i == 0:
+            continue
+        
         filepath = row['filepath']
-        caption_data = row['caption_data']
+        import pdb; pdb.set_trace()
+        label = eval(row['caption_data'])['<MORE_DETAILED_CAPTION>']
 
         # Process label
         label_tokens = processor.tokenizer(label)

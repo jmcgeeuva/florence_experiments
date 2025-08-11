@@ -15,7 +15,7 @@ def next_word_similarity(sentence1, sentence2):
 
 def main():
     # Define the labels of interest
-    target_labels = ['Individual activity', 'Student writing', 'Individual technology', 'Desks-sitting ', 'Student(s) standing or walking']
+    target_labels = ['Individual activity', 'Student raising hand', 'Student writing', 'Individual technology', 'Desks-sitting ', 'Student(s) standing or walking']
     
     # Load label definition embeddings
     label_embeddings = {}
@@ -113,7 +113,9 @@ def main():
     # Find top matches for each label using embedding similarity
     print("\nTop caption matches for each label (embedding similarity):")
     for label in labels:
-        top_matches = df_embedding.loc[label].nlargest(3)
+        import pdb; pdb.set_trace()
+        top_matches = sorted(df_embedding.loc[label].tolist())[-3:]
+        # top_matches = df_embedding.loc[label].nlargest(3)
         print(f"\n{label}:")
         for frame, score in top_matches.items():
             print(f"  Frame {frame}: {score:.4f} - {caption_embeddings[frame]['caption'][:100]}...")

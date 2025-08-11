@@ -71,6 +71,8 @@ def run_example(task_prompt, image, text_input=None):
 video_file = "/standard/spencerNSF/NeuralNetworksProjectVideos/314hours/314hours Videos/110.006.2018_ELA2_Year2_20180205.mp4"
 output_csv = "output.csv"
 timestamps = [3000, 3250, 3500]# 3750, 4000, 4250, 4500, 4750, 5000, 5250, 5500, 5750, 6000, 6250, 6500]
+# timestamps = [3000, 5000, 6500]
+timestamps = [7800, 8000]
 with open(output_csv, "w", newline="") as f:
     writer = csv.writer(f)
     writer.writerow(["image_number", "caption_result"])
@@ -80,10 +82,14 @@ with open(output_csv, "w", newline="") as f:
     #         continue
 
     # video_path = os.path.join(video_folder, video_file)
+    save_image = True
     video_path = video_file
     for timestamp_ms in timestamps:
         try:
             image = get_frame_at_timestamp(video_path, timestamp_ms)
+            if save_image:
+                print(f"{timestamp_ms}ms.jpg")
+                image.save(f"{timestamp_ms}ms.jpg")
             task_prompt = "<MORE_DETAILED_CAPTION>"
             result = run_example(task_prompt, image)  # Assume run_example accepts image input
             image_number = f"{os.path.splitext(video_file)[0]}_{timestamp_ms}ms"
