@@ -1,0 +1,3 @@
+[submodule "florence_pytorch"]
+	path = florence_pytorch
+	url = https://github.com/jmcgeeuva/florence_pytorch.git
