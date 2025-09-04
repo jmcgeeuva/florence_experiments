@@ -1,5 +1,5 @@
 from similarities import cross_similarity
-from next_word import next_word_distribution
+from florence_pytorch.next_word import next_word_distribution
 import torch
 import os
 import numpy as np
