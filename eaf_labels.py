@@ -1,6 +1,7 @@
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 import csv
+import argparse
 
 def format_label(tier_id):
     words = tier_id.strip().split()
@@ -42,12 +43,10 @@ def parse_eaf_annotations(eaf_file):
 
     return annotations_per_frame
 
-def main():
-    eaf_file_path = "/standard/spencerNSF/NeuralNetworksProjectVideos/314hours/314hours Video ELAN Labels/110.006.2018_ELA2_Year2_20180205.eaf"
+def get_eaf_labels(eaf_file_path, frame_times):
     frame_annotations = parse_eaf_annotations(eaf_file_path)
 
     # Get annotations for a specific frame time in milliseconds
-    frame_times = [3000, 3250, 3500, 3750, 4000, 4250, 4500, 4750, 5000, 5250, 5500, 5750, 6000, 6250, 6500]
     with open("eaf_labels.csv", "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["image_number", "caption_result"])
@@ -58,4 +57,9 @@ def main():
     
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="")
+    parser.add_argument("--video", default="/standard/spencerNSF/NeuralNetworksProjectVideos/314hours/Video Annotations_314 Hours/110.006.2018_ELA2_Year2_20180205.eaf", help="The name of the user to greet.")
+    parser.add_argument('--nargs', nargs='+', default=[3000, 3250, 3500, 3750, 4000, 4250, 4500, 4750, 5000, 5250, 5500, 5750, 6000, 6250, 6500])
+    args = parser.parse_args()
+
+    get_eaf_labels(args.video, args.nargs)

@@ -1,106 +1,59 @@
-import cv2
-
-from transformers import AutoProcessor, AutoModelForCausalLM
-import requests
-import torch
-
-from PIL import Image, ImageDraw, ImageFont 
-import random
-import numpy as np
-import copy
-import os
+from florence_pytorch.florence.configuration_florence2 import *
+from florence_pytorch.florence.florence_attn import *
+import florence_pytorch.florence.modeling_florence2 as flor2
+from florence_pytorch.florence.modeling_florence2 import load
+from florence_pytorch.florence.processor import *
 import csv
+import cv2
+from PIL import Image, ImageDraw, ImageFont 
+# from florence_pytorch.florence.utils import run_example
+import argparse
+from helper import get_frame_at_timestamp, run_task
 
-def get_frame_at_timestamp(video_path, timestamp_ms):
-    print("Getting frame")
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise IOError(f"Cannot open video {video_path}")
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-    cap.set(cv2.CAP_PROP_POS_MSEC, timestamp_ms)
-    ret, frame = cap.read()
-    cap.release()
-
-    if not ret:
-        raise ValueError(f"Could not retrieve frame at {timestamp_ms}ms from {video_path}")
-
-    # Convert BGR (OpenCV) to RGB (PIL)
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    print("got frame")
-    return Image.fromarray(frame_rgb)
-
-def run_example(task_prompt, image, text_input=None):
-    print("running example")
-    model_id = "microsoft/Florence-2-base-ft"
-
-    # Load model and processor
-    model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True).eval().cuda()
-    processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
-
-    if text_input is None:
-        prompt = task_prompt
-    else:
-        prompt = task_prompt + text_input
+def main():
+    parser = argparse.ArgumentParser(description="")
+    parser.add_argument("--video", default="/standard/spencerNSF/NeuralNetworksProjectVideos/314hours/Videos_314 Hours/110.006.2018_ELA2_Year2_20180205.mp4", help="The name of the user to greet.")
+    parser.add_argument('--nargs', nargs='+', default=[3000, 3250, 3500, 4000])
+    # parser.add_argument('--prompt', default="<MORE_DETAILED_CAPTION>")
+    args = parser.parse_args()
     
-    inputs = processor(text=prompt, images=image, return_tensors="pt")
-    #print(f"inputs ---> {inputs}")
+    device = "cuda" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
+    model_id = "BASE_FT" #"microsoft/Florence-2-base-ft"
+    model, processor = load(model_id, device)
 
-    generated_ids = model.generate(
-        input_ids=inputs["input_ids"].cuda(),
-        pixel_values=inputs["pixel_values"].cuda(),
-        max_new_tokens=1024,
-        early_stopping=False,
-        do_sample=False,
-        num_beams=3,
-    )
-    #print(f"generated_ids ---> {generated_ids}")
+    video_file = args.video
+    output_csv = video_file.split('/')[-1].replace('.mp4', 'one_frame.csv')
+    timestamps = args.nargs
 
-    generated_text = processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
-    #print(f"generated_text ---> {generated_text}")
+    with open(output_csv, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["image_number", "caption_result"])
 
-    parsed_answer = processor.post_process_generation(
-        generated_text,
-        task=task_prompt,
-        image_size=(image.width, image.height)
-    )
+        video_path = video_file
+        for timestamp_ms in timestamps:
+            try:
+                image = get_frame_at_timestamp(video_path, timestamp_ms)
+                task_prompt = "<MORE_DETAILED_CAPTION>"
+                result = run_task(model, processor, task_prompt, image)[task_prompt]
+                print("result phrase:", result)  
+                task_prompt = '<CAPTION_TO_PHRASE_GROUNDING>'
+                result_2 = result = run_task(model, processor, task_prompt, image, text_input=result)
+                image_number = f"{video_path.split('/')[-1]}_{timestamp_ms}ms"
+                writer.writerow([image_number, result_2])
+            except Exception as e:
+                print(f"Skipping {video_file} at {timestamp_ms}ms due to error: {e}")
 
-    print("ran example")
 
-    return parsed_answer
+    # sentence = "A book is used or held by teacher or student"
 
+    # tokens = processor.tokenizer(sentence)
+    # t = torch.tensor(tokens['input_ids']).to(device=model.device)
+    # embedding = model.get_input_embeddings()(t)
+    # print(f'The tokens are as follows: {embedding} of size {embedding.shape} this means there are {embedding.shape[0]-2} words with 2 tokens for start and end and an embedding size of {embedding.shape[1]} from florence')
+    return 0
 
-video_file = "/standard/spencerNSF/NeuralNetworksProjectVideos/314hours/314hours Videos/110.006.2018_ELA2_Year2_20180205.mp4"
-output_csv = "output.csv"
-timestamps = [3000, 3250, 3500] #3750, 4000, 4250, 4500, 4750, 5000, 5250, 5500, 5750, 6000, 6250, 6500]
-with open(output_csv, "w", newline="") as f:
-    writer = csv.writer(f)
-    writer.writerow(["image_number", "caption_result"])
-
-    # for video_file in os.listdir(video_folder):
-    #     if not video_file.endswith(".mp4"):
-    #         continue
-
-    # video_path = os.path.join(video_folder, video_file)
-    video_path = video_file
-    for timestamp_ms in timestamps:
-        try:
-            image = get_frame_at_timestamp(video_path, timestamp_ms)
-            task_prompt = "<MORE_DETAILED_CAPTION>"
-            result = run_example(task_prompt, image)['<MORE_DETAILED_CAPTION>']
-            print("result phrase:", result)  
-            task_prompt = '<CAPTION_TO_PHRASE_GROUNDING>'
-            result_2 = run_example(task_prompt, image, text_input=result)
-            image_number = f"{os.path.splitext(video_file)[0]}_{timestamp_ms}ms"
-            writer.writerow([image_number, result_2])
-        except Exception as e:
-            print(f"Skipping {video_file} at {timestamp_ms}ms due to error: {e}")
-
-# def main():
-#     video_folder = "/standard/spencerNSF/NeuralNetworksProjectVideos/314hours/314hours Videos/110.006.2018_ELA2_Year2_20180205.mp4"
-#     output_csv = "output.csv"
-#     timestamps = [1000, 1500, 2000]  # Replace with your desired list of timestamps (in ms)
-
-#     get_captions(video_folder, output_csv, timestamps)
-
-# if __name__ == "__main__":
-#     main()
+if __name__ == '__main__':
+    main()
