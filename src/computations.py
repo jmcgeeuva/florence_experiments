@@ -1,4 +1,4 @@
-from similarities import cross_similarity
+from .similarities import cross_similarity
 from florence_pytorch.next_word import next_word_distribution
 import torch
 import os
@@ -68,32 +68,15 @@ def get_captions(caption_file_path, target_labels):
         print(f"Loaded caption for frame: {frame}")
     
     return caption_embeddings
-    
-def create_table(caption_embeddings, target_labels, label_embeddings, embedding_similarity_matrix, text_similarity_matrix):
-    # Convert to pandas DataFrame for easier analysis and saving
-    axis_frames = sorted(caption_embeddings.keys(), key=lambda x: int(x) if x.isdigit() else x)
-    axis_labels = [label for label in target_labels if label in label_embeddings]
-    
-    # Initialize the DataFrame with NaN values
-    df_embedding = pd.DataFrame(index=axis_labels, columns=axis_frames)
-    df_text = pd.DataFrame(index=axis_labels, columns=axis_frames)
-    
-    # Fill in the values
-    for label in axis_labels:
-        for frame in axis_frames:
-            if frame in embedding_similarity_matrix[label]:
-                df_embedding.loc[label, frame] = embedding_similarity_matrix[label][frame]
 
+def print_table_to_file(df_embedding, df_text):
     df_embedding.to_csv('cross_similarity_heatmap.csv')
     print(f"Saved embedding similarity matrix to 'cross_similarity_heatmap.csv'")
-
-    for label in axis_labels:
-        for frame in axis_frames:
-            if frame in text_similarity_matrix[label]:
-                df_text.loc[label, frame] = text_similarity_matrix[label][frame]
     
     df_text.to_csv('next_word_similarities_heatmap.csv')
     print(f"Saved text distribution similarity matrix to 'next_word_similarities_heatmap.csv'")
+
+def print_results(df_embedding, df_text, caption_embeddings, axis_labels):
 
     print("\nEmbedding Similarity Statistics:")
     print(f"Average similarity: {df_embedding.values.mean():.4f}")
@@ -121,8 +104,30 @@ def create_table(caption_embeddings, target_labels, label_embeddings, embedding_
         for frame, score in top_matches.items():
             print(f"  Frame {frame}: {score:.4f} - {caption_embeddings[frame]['caption'][:100]}...")
 
+def create_table(caption_embeddings, target_labels, label_embeddings, embedding_similarity_matrix, text_similarity_matrix):
+    # Convert to pandas DataFrame for easier analysis and saving
+    axis_frames = sorted(caption_embeddings.keys(), key=lambda x: int(x) if x.isdigit() else x)
+    axis_labels = [label for label in target_labels if label in label_embeddings]
+    
+    # Initialize the DataFrame with NaN values
+    df_embedding = pd.DataFrame(index=axis_labels, columns=axis_frames)
+    df_text = pd.DataFrame(index=axis_labels, columns=axis_frames)
+    
+    # Fill in the values
+    for label in axis_labels:
+        for frame in axis_frames:
+            if frame in embedding_similarity_matrix[label]:
+                df_embedding.loc[label, frame] = embedding_similarity_matrix[label][frame]
+
+    for label in axis_labels:
+        for frame in axis_frames:
+            if frame in text_similarity_matrix[label]:
+                df_text.loc[label, frame] = text_similarity_matrix[label][frame]
+
+    return df_embedding, df_text, axis_labels
+
 # Calculate similarities
-def calculate_similarity(label_embeddings, caption_embeddings, similarity_function, category='embedding', label_level='embedding'):
+def calculate_similarity(label_embeddings, caption_embeddings, similarity_function, category, label_level):
     similarity_matrix = {}
     for label in label_embeddings.keys():
         label_element = label_embeddings[label][label_level]
@@ -158,17 +163,11 @@ def calculate_text_similarity(label_embeddings, caption_embeddings):
     similarity_matrix = calculate_similarity(label_embeddings, caption_embeddings, next_word_similarity, category='caption', label_level='definition')
     return similarity_matrix
 
-def compute_cross_similarity(label_file_path, caption_file_path, target_labels):
+def compute_cross_similarity(label_embeddings, caption_file_path, target_labels):
     """Runs the calculation for similarities of embeddings and texts
 
     Parameters
     ----------
-    label_file_path : string
-        The path to the label file directory of embeddings (in .pt format)
-
-    caption_file_path : string
-        The path to the caption file directory of caption definitions (in .pt format)
-
     target_labels : list
         A list of strings that describe the labels in question
 
@@ -176,13 +175,11 @@ def compute_cross_similarity(label_file_path, caption_file_path, target_labels):
     -------
     Nothing but instead creates a csv file at two locations one for text and the other for embeddings
     """
-    label_embeddings = get_labels(label_file_path, target_labels)
-    caption_embeddings = get_captions(caption_file_path, target_labels)
-
     embedding_similarity_matrix = calculate_embedding_similarity(label_embeddings, caption_embeddings)
     text_similarity_matrix = calculate_text_similarity(label_embeddings, caption_embeddings)
         
-    create_table(caption_embeddings, target_labels, label_embeddings, embedding_similarity_matrix, text_similarity_matrix)
+    df_embedding, df_text, axis_labels = create_table(caption_embeddings, target_labels, label_embeddings, embedding_similarity_matrix, text_similarity_matrix)
+    return df_embedding, df_text, caption_embeddings, axis_labels
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="")
@@ -193,4 +190,8 @@ if __name__ == "__main__":
     # Define the labels of interest
     target_labels = ['Individual activity', 'Student writing', 'Individual technology', 'Sitting at desks', 'Student(s) standing or walking', 'Small group activity', 'Student raising hand']
 
-    compute_cross_similarity(args.eaf, args.caption, target_labels)
+    label_embeddings = get_labels(args.eaf, target_labels)
+    caption_embeddings = get_captions(args.caption, target_labels)
+    df_embedding, df_text, caption_embeddings, axis_labels = compute_cross_similarity(label_embeddings, caption_embeddings, target_labels)
+    print_table_to_file(df_embedding, df_text)
+    print_results(df_embedding, df_text, caption_embeddings, axis_labels)
