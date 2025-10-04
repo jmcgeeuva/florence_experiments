@@ -2,6 +2,7 @@ from src.similarities import cross_similarity
 from src.create_embeddings import create_embeddings
 from src.visualize import visualize_cross_similarity
 from src.computations import get_captions, next_word_similarity, calculate_similarity, create_table
+from src.timestamp_captions import get_timestamp_captions
 import florence_pytorch.florence.modeling_florence2 as flor2
 import argparse
 import torch
@@ -20,9 +21,15 @@ if __name__ == '__main__':
 
     label_embeddings = create_embeddings(flo_model, processor, args.csv)
     
+    
     # FIXME Dictionary of frames with text caption and embedding
-    caption_file_path = "./embeddings/detailed_caption_embeddings/*.pt"
-    caption_embeddings = get_captions(caption_file_path, args.targets)
+    task_prompt = "<MORE_DETAILED_CAPTION>"
+    video_path = "/standard/spencerNSF/NeuralNetworksProjectVideos/314hours/Videos_314 Hours/110.006.2018_ELA2_Year2_20180205.mp4"
+    timestamps = [3000, 3250, 4000]
+    timestamp_dict = get_timestamp_captions(flo_model, processor, video_path, timestamps, task_prompt)
+    import pdb; pdb.set_trace()
+    # caption_file_path = "./embeddings/detailed_caption_embeddings/*.pt"
+    # caption_embeddings = get_captions(caption_file_path, args.targets)
     
     embedding_similarity_matrix = calculate_similarity(label_embeddings, 
                                                                  caption_embeddings, 
@@ -46,8 +53,5 @@ if __name__ == '__main__':
     
     
     # Load the CSV
-    df_embedding.columns = df_embedding.columns.astype(float)
-    df_text.columns = df_text.columns.astype(float)
-
-    visualize_cross_similarity(df_embedding, "emb_similarity_heatmap.png")
-    visualize_cross_similarity(df_text, "text_similarity_heatmap.png")
+    visualize_cross_similarity(df_embedding.astype(float), "emb_similarity_heatmap.png")
+    visualize_cross_similarity(df_text.astype(float), "text_similarity_heatmap.png")

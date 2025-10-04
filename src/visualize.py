@@ -4,6 +4,9 @@ import matplotlib.pyplot as plt
 import argparse
 
 def visualize_cross_similarity(df, outfile):
+    # Convert columns to integers (time in ms)
+    df.columns = df.columns.astype(int)
+
     # Create the heatmap
     plt.figure(figsize=(14, 6))
     sns.heatmap(df, annot=True, fmt=".2f", cmap="YlGnBu", cbar_kws={'label': 'Similarity Score'})
@@ -18,14 +21,10 @@ def visualize_cross_similarity(df, outfile):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="")
-    parser.add_argument("--video", default="./results/csv/cross_similarity_heatmap.csv", help="The name of the user to greet.")
+    parser.add_argument("--video", default="./results/computations/cross_similarity_heatmap.csv", help="The name of the user to greet.")
     parser.add_argument("--out", default="cross_similarity_heatmap.png", help="The name of the user to greet.")    
     args = parser.parse_args()
     
     # Load the CSV
     df = pd.read_csv(args.video, index_col=0)
-
-    # Convert columns to integers (time in ms)
-    df.columns = df.columns.astype(int)
-
-    visualize_cross_similarity(args.video, args.out)
+    visualize_cross_similarity(df, args.out)

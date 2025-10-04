@@ -8,7 +8,7 @@ import cv2
 from PIL import Image, ImageDraw, ImageFont 
 # from florence_pytorch.florence.utils import run_example
 import argparse
-from helper import get_frame_at_timestamp, run_task
+from src.helper import get_frame_at_timestamp, run_task
 
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"

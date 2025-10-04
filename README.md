@@ -40,3 +40,10 @@
 **Description**: Creates a visual of the attention scores from a cross_similarity_heatmap.csv (created by computations.py) file containing columns of timestamps of rows of each label and the score for that label
 **Options**:
 * --video: path to the video to process
+
+**Script**: captions.py
+**Description**: Create CSV files for each video in a label directory listing in detail the caption for each frame jpg in that directory
+**Options**:
+* --label_path: Path to directory of jpgs
+* --nargs: List of timestamps
+* --outdir: output directory to print to
