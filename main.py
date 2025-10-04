@@ -2,7 +2,7 @@ from src.similarities import cross_similarity
 from src.create_embeddings import create_embeddings
 from src.visualize import visualize_cross_similarity
 from src.computations import get_captions, next_word_similarity, calculate_similarity, create_table
-from src.timestamp_captions import get_timestamp_captions
+from src.timestamp_captions import get_timestamp_captions, create_caption_embeddings
 import florence_pytorch.florence.modeling_florence2 as flor2
 import argparse
 import torch
@@ -25,11 +25,9 @@ if __name__ == '__main__':
     # FIXME Dictionary of frames with text caption and embedding
     task_prompt = "<MORE_DETAILED_CAPTION>"
     video_path = "/standard/spencerNSF/NeuralNetworksProjectVideos/314hours/Videos_314 Hours/110.006.2018_ELA2_Year2_20180205.mp4"
-    timestamps = [3000, 3250, 4000]
+    timestamps = [3000] #, 3250, 4000]
     timestamp_dict = get_timestamp_captions(flo_model, processor, video_path, timestamps, task_prompt)
-    import pdb; pdb.set_trace()
-    # caption_file_path = "./embeddings/detailed_caption_embeddings/*.pt"
-    # caption_embeddings = get_captions(caption_file_path, args.targets)
+    caption_embeddings = create_caption_embeddings(flo_model, processor, timestamp_dict)
     
     embedding_similarity_matrix = calculate_similarity(label_embeddings, 
                                                                  caption_embeddings, 

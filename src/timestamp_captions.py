@@ -26,6 +26,19 @@ def get_timestamp_captions(model, processor, video_path, timestamps, task_prompt
     
     return timestamp_dict
 
+def create_caption_embeddings(flo_model, processor, timestamp_dict):
+    caption_dict = {}
+    for timestamp, caption in timestamp_dict.items():
+        caption_tokens = processor.tokenizer(caption)
+        caption_tensor = torch.tensor(caption_tokens['input_ids']).to(device=flo_model.device)
+        caption_embedding = flo_model.get_input_embeddings()(caption_tensor)
+        caption_dict[timestamp] = {
+            'caption': caption,
+            'embedding': caption_embedding
+        }
+
+    return caption_dict
+
 def print_timestamp_captions(video_path, timestamps, timestamp_dict):
     output_csv = video_path.split('/')[-1].replace('.mp4', 'timestamp.csv')
     with open(output_csv, "w", newline="") as f:

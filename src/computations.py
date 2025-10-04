@@ -106,7 +106,10 @@ def print_results(df_embedding, df_text, caption_embeddings, axis_labels):
 
 def create_table(caption_embeddings, target_labels, label_embeddings, embedding_similarity_matrix, text_similarity_matrix):
     # Convert to pandas DataFrame for easier analysis and saving
-    axis_frames = sorted(caption_embeddings.keys(), key=lambda x: int(x) if x.isdigit() else x)
+    if type(list(caption_embeddings.keys())[0]) == str:
+        axis_frames = sorted(caption_embeddings.keys(), key=lambda x: int(x) if x.isdigit() else x)
+    else:
+        axis_frames = sorted(caption_embeddings.keys())
     axis_labels = [label for label in target_labels if label in label_embeddings]
     
     # Initialize the DataFrame with NaN values
@@ -129,17 +132,16 @@ def create_table(caption_embeddings, target_labels, label_embeddings, embedding_
 # Calculate similarities
 def calculate_similarity(label_embeddings, caption_embeddings, similarity_function, category, label_level):
     similarity_matrix = {}
-    for label in label_embeddings.keys():
-        label_element = label_embeddings[label][label_level]
+    for label, embeddings in label_embeddings.items():
+        label_element = embeddings[label_level]
         
         similarities = {}
         for frame, caption_data in caption_embeddings.items():
             caption_element = caption_data[category]
-
-            try:
-                emb_similarity = similarity_function(label_element, caption_element)
-            except:
-                import pdb; pdb.set_trace()
+            if type(label_element) != str:
+                label_element = label_element.to(caption_element.device)
+            
+            emb_similarity = similarity_function(label_element, caption_element)
             similarities[frame] = emb_similarity
             
         similarity_matrix[label] = similarities

@@ -41,9 +41,22 @@
 **Options**:
 * --video: path to the video to process
 
+## Random
+
 **Script**: captions.py
 **Description**: Create CSV files for each video in a label directory listing in detail the caption for each frame jpg in that directory
 **Options**:
 * --label_path: Path to directory of jpgs
 * --nargs: List of timestamps
 * --outdir: output directory to print to
+
+**Script**: new_trail.py
+**Description**: 
+**Options**:
+
+**Script**: embeddings.py
+**Description**: Loops through a csv for a specific video from the bounded dataset and gets the labels and bounding box. From the bounding box the image embedding ix found and the label embeddings are found. All are saved in a pt file called \[image_num\]_\[i\].pt
+**Options**:
+* --image_folder: List of timestamps
+* --output_folder: output directory to print to
+* --csv_path
