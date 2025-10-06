@@ -3,20 +3,40 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import argparse
 
-def visualize_cross_similarity(df, outfile):
+def visualize_cross_similarity(df, outfile, red_labels=None):
     # Convert columns to integers (time in ms)
     df.columns = df.columns.astype(int)
 
     # Create the heatmap
     plt.figure(figsize=(14, 6))
-    sns.heatmap(df, annot=True, fmt=".2f", cmap="YlGnBu", cbar_kws={'label': 'Similarity Score'})
+    ax = sns.heatmap(df, annot=True, fmt=".2f", cmap="YlGnBu", cbar_kws={'label': 'Similarity Score'})
 
     plt.xlabel("Time of Caption (ms)")
     plt.ylabel("Label (Definition)")
     plt.title("Cross-Similarities Between Detailed Caption and Definitions of Labels in Frame Heatmap")
     plt.tight_layout()
-    plt.savefig(outfile, dpi=300)
 
+    # Customize y-axis tick label colors
+    # if red_labels is not None:
+    #     for tick_label in ax.get_yticklabels():
+    #         label_text = tick_label.get_text()
+    #         if label_text in red_labels:
+    #             tick_label.set_color("red")
+    #         else:
+    #             tick_label.set_color("black")
+    red_cells = []
+    for frame, labels in red_labels.items():
+        for label in labels:
+            red_cells.append((frame, label))
+
+    for i, row_label in enumerate(df.index):
+        for j, col_label in enumerate(df.columns):
+            val = df.iloc[i, j]
+            color = "red" if red_cells and (col_label, row_label) in red_cells else "black"
+            ax.text(j + 0.5, i + 0.5, f"{val:.2f}",
+                    ha='center', va='center', color=color)
+
+    plt.savefig(outfile, dpi=300)
     print('Done creating cross_similarity_heatmap')
 
 if __name__ == '__main__':

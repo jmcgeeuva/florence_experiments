@@ -47,11 +47,17 @@ def get_eaf_labels(eaf_file_path, frame_times):
     frame_annotations = parse_eaf_annotations(eaf_file_path)
 
     # Get annotations for a specific frame time in milliseconds
+    eaf_dict = {}
+    for frame_time in frame_times:
+        labels_at_frame = frame_annotations.get(frame_time, [])
+        eaf_dict[frame_time] = labels_at_frame
+    return eaf_dict
+
+def print_eaf(eaf_dict):
     with open("eaf_labels.csv", "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["image_number", "caption_result"])
-        for frame_time in frame_times:
-            labels_at_frame = frame_annotations.get(frame_time, [])
+        for frame_time, labels_at_frame in eaf_dict.items():
             print(f"Labels at frame {frame_time}ms:", labels_at_frame)
             writer.writerow([frame_time, labels_at_frame])
     
@@ -62,4 +68,5 @@ if __name__ == "__main__":
     parser.add_argument('--nargs', nargs='+', default=[3000, 3250, 3500, 3750, 4000, 4250, 4500, 4750, 5000, 5250, 5500, 5750, 6000, 6250, 6500])
     args = parser.parse_args()
 
-    get_eaf_labels(args.video, args.nargs)
+    out_dict = get_eaf_labels(args.video, args.nargs)
+    print_eaf(out_dict)

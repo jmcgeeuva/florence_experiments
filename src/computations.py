@@ -103,29 +103,31 @@ def print_results(df_embedding, df_text, caption_embeddings, axis_labels):
         print(f"\n{label}:")
         for frame, score in top_matches.items():
             print(f"  Frame {frame}: {score:.4f} - {caption_embeddings[frame]['caption'][:100]}...")
-
-def create_table(caption_embeddings, target_labels, label_embeddings, embedding_similarity_matrix, text_similarity_matrix):
-    # Convert to pandas DataFrame for easier analysis and saving
+            
+def get_df(caption_embeddings, label_embeddings, target_labels, matrix):
     if type(list(caption_embeddings.keys())[0]) == str:
         axis_frames = sorted(caption_embeddings.keys(), key=lambda x: int(x) if x.isdigit() else x)
     else:
         axis_frames = sorted(caption_embeddings.keys())
     axis_labels = [label for label in target_labels if label in label_embeddings]
+    df = pd.DataFrame(index=axis_labels, columns=axis_frames)
+    for label in axis_labels:
+        for frame in axis_frames:
+            if frame in matrix[label]:
+                df.loc[label, frame] = matrix[label][frame]
+    return df
+
+def create_table(caption_embeddings, target_labels, label_embeddings, embedding_similarity_matrix, text_similarity_matrix):
+    # Convert to pandas DataFrame for easier analysis and saving
     
     # Initialize the DataFrame with NaN values
-    df_embedding = pd.DataFrame(index=axis_labels, columns=axis_frames)
-    df_text = pd.DataFrame(index=axis_labels, columns=axis_frames)
     
-    # Fill in the values
-    for label in axis_labels:
-        for frame in axis_frames:
-            if frame in embedding_similarity_matrix[label]:
-                df_embedding.loc[label, frame] = embedding_similarity_matrix[label][frame]
 
-    for label in axis_labels:
-        for frame in axis_frames:
-            if frame in text_similarity_matrix[label]:
-                df_text.loc[label, frame] = text_similarity_matrix[label][frame]
+    # Fill in the values
+    matrix = embedding_similarity_matrix
+    df_embedding = get_df(caption_embeddings, label_embeddings, target_labels, matrix)
+    matrix = text_similarity_matrix
+    df_text = get_df(caption_embeddings, label_embeddings, target_labels, matrix)
 
     return df_embedding, df_text, axis_labels
 

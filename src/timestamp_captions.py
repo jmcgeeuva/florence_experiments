@@ -16,15 +16,17 @@ from .helper import get_frame_at_timestamp, run_task
 
 def get_timestamp_captions(model, processor, video_path, timestamps, task_prompt):
     timestamp_dict = {}
+    images = {}
     for timestamp_ms in timestamps:
         try:
             image = get_frame_at_timestamp(video_path, timestamp_ms)
+            images[timestamp_ms]  = image
             result = run_task(model, processor, task_prompt, image)  # Assume run_example accepts image input
             timestamp_dict[timestamp_ms] = result[task_prompt]
         except Exception as e:
             print(f"Skipping {video_file} at {timestamp_ms}ms due to error: {e}")
     
-    return timestamp_dict
+    return timestamp_dict, images
 
 def create_caption_embeddings(flo_model, processor, timestamp_dict):
     caption_dict = {}
@@ -59,6 +61,6 @@ if __name__ == "__main__":
     model_id = "BASE_FT" #"microsoft/Florence-2-base-ft"
     model, processor = load(model_id)
 
-    timestamp_dict = get_timestamp_captions(model, processor, args.video, args.nargs, args.prompt)
+    timestamp_dict, images = get_timestamp_captions(model, processor, args.video, args.nargs, args.prompt)
     print_timestamp_captions(args.video, args.nargs, timestamp_dict)
 

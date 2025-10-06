@@ -8,6 +8,7 @@
 .config/
 .local/
 __pycache__/
+out_frame/
 
 .ood_ssh/
 ondemand/
