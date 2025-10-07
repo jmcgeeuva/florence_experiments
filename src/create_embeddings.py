@@ -8,6 +8,7 @@ import pandas as pd
 import torch
 import json
 import argparse
+from .helper import get_flo_embeddings
 
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -22,15 +23,11 @@ def create_embeddings(flo_model, processor, detailed_caption_file):
         
         # Process label
         label = row['label']
-        label_tokens = processor.tokenizer(label)
-        label_tensor = torch.tensor(label_tokens['input_ids']).to(device=flo_model.device)
-        label_embedding = flo_model.get_input_embeddings()(label_tensor)
+        label_embedding = get_flo_embeddings(flo_model, processor, label)
         
         # Process definition
         definition = row['definition']
-        def_tokens = processor.tokenizer(definition)
-        def_tensor = torch.tensor(def_tokens['input_ids']).to(device=flo_model.device)
-        def_embedding = flo_model.get_input_embeddings()(def_tensor)
+        def_embedding = get_flo_embeddings(flo_model, processor, definition)
 
         embedding_data[label] = {
             'label_embedding': label_embedding.detach().cpu(),

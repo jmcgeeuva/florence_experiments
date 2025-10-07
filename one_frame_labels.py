@@ -8,7 +8,7 @@ import cv2
 from PIL import Image, ImageDraw, ImageFont 
 # from florence_pytorch.florence.utils import run_example
 import argparse
-from src.helper import get_frame_at_timestamp, run_task
+from src.helper import get_frame_at_timestamp, run_florence_task
 
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -37,10 +37,10 @@ def main():
             try:
                 image = get_frame_at_timestamp(video_path, timestamp_ms)
                 task_prompt = "<MORE_DETAILED_CAPTION>"
-                result = run_task(model, processor, task_prompt, image)[task_prompt]
+                result = run_florence_task(model, processor, task_prompt, image)[task_prompt]
                 print("result phrase:", result)  
                 task_prompt = '<CAPTION_TO_PHRASE_GROUNDING>'
-                result_2 = result = run_task(model, processor, task_prompt, image, text_input=result)
+                result_2 = result = run_florence_task(model, processor, task_prompt, image, text_input=result)
                 image_number = f"{video_path.split('/')[-1]}_{timestamp_ms}ms"
                 writer.writerow([image_number, result_2])
             except Exception as e:

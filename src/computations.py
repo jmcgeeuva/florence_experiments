@@ -132,7 +132,7 @@ def create_table(caption_embeddings, target_labels, label_embeddings, embedding_
     return df_embedding, df_text, axis_labels
 
 # Calculate similarities
-def calculate_similarity(label_embeddings, caption_embeddings, similarity_function, category, label_level):
+def calculate_similarity(label_embeddings, caption_embeddings, similarity_function, category, label_level, normalize=False):
     similarity_matrix = {}
     for label, embeddings in label_embeddings.items():
         label_element = embeddings[label_level]
@@ -148,7 +148,24 @@ def calculate_similarity(label_embeddings, caption_embeddings, similarity_functi
             
         similarity_matrix[label] = similarities
         print(f"Computed similarities for label: {label}")
-    
+
+    if normalize:
+        # Ensure consistent key ordering
+        outer_keys = sorted(similarity_matrix.keys())
+        inner_keys = sorted(next(iter(similarity_matrix.values())).keys())
+
+        tensor = torch.tensor([[similarity_matrix[o][i] for i in inner_keys] for o in outer_keys])
+        # tensor = tensor.permute(1, 0)
+        tensor = torch.nn.functional.softmax(tensor, dim=0)
+        # tensor = tensor.permute(1, 0)
+        tmp_dict = {}
+        for i, t in enumerate(tensor):
+            key = outer_keys[i]
+            tmp_dict[key] = {}
+            for j, frame in enumerate(inner_keys):
+                tmp_dict[key][frame] = t[j]
+        
+        return tmp_dict
     return similarity_matrix
 
 def calculate_embedding_similarity(label_embeddings, caption_embeddings):

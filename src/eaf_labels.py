@@ -44,13 +44,14 @@ def parse_eaf_annotations(eaf_file):
     return annotations_per_frame
 
 def get_eaf_labels(eaf_file_path, frame_times):
-    frame_annotations = parse_eaf_annotations(eaf_file_path)
+    eaf_dict = parse_eaf_annotations(eaf_file_path)
 
     # Get annotations for a specific frame time in milliseconds
-    eaf_dict = {}
-    for frame_time in frame_times:
-        labels_at_frame = frame_annotations.get(frame_time, [])
-        eaf_dict[frame_time] = labels_at_frame
+    if frame_times is not None:
+        eaf_dict = {}
+        for frame_time in frame_times:
+            labels_at_frame = frame_annotations.get(frame_time, [])
+            eaf_dict[frame_time] = labels_at_frame
     return eaf_dict
 
 def print_eaf(eaf_dict):
