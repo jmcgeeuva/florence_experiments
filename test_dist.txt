@@ -1,0 +1,28 @@
+seed,24
+Train label Whole-class activity,2918
+Train label Individual activity,470
+Train label Small group activity,654
+Train label Transition,1841
+Train label On task student talking with student,0
+Train label Teacher Supporting,1176
+Train label Student raising hand,167
+Train label Sitting,1666
+Train label Standing,2189
+Train label Walking,834
+Train label Sitting on carpet or floor,2533
+Train label Sitting at group tables,1084
+Train label Sitting at desks,2707
+Train label Student(s) standing or walking,2509
+Train label One student,112
+Train label Multiple students with student interaction,590
+Train label Multiple students without student interaction,71
+Train label Using or holding book,866
+Train label Using or holding worksheet,1025
+Train label Presentation with technology,2112
+Train label Using or holding instructional tool,963
+Train label Using or holding notebook,238
+Train label Individual technology,970
+Train label Teacher writing,208
+Train label Student writing,498
+Train label Discourse,607
+Train label No Action,392
