@@ -275,4 +275,4 @@ if __name__ == "__main__":
                 label_count[ind] += 1
 
     for i, (label, definition) in enumerate(edu.gt_labels):
-        print(f'Train label {label}: {label_count[i]}')
+        print(f'Test label {label}: {label_count[i]}')
