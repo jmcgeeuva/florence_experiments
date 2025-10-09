@@ -16,7 +16,7 @@ def cross_similarity(t1, t2):
     t2_norm = t2 / (t2.norm(dim=-1, keepdim=True) + 1e-8)
     sim_matrix = torch.matmul(t1_norm, t2_norm.T)  # (len1, len2)
     final_score = sim_matrix.max(dim=1)[0].mean()
-    return final_score.item()
+    return final_score.item(), sim_matrix
 
 def max_pool_cosine(t1, t2):
     t1_pooled = t1.max(dim=0)[0]

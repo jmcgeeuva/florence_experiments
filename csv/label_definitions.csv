@@ -4,6 +4,7 @@
 "Small group activity","Students are working together with peers (e.g., think-pair-share, book club); this is prioritized when there are students interacting or somewhat interacting near one another."
 "Transition","The students and teacher are transitioning from one instructional activity to another (e.g., whole class to small group). The teacher and students are moving from one spot of the room to another (e.g., from the carpet to desks). Other than specific behavioral directions, no instruction or meaningful instructional activity is occurring during the transition."
 "On task student talking with student","Students are conversing together; can overlap with ""small group activity""; this is specific to mouth movements within the parent code time interval; without teacher support."
+"Teacher Supporting","Teacher is supporting a student while they work individually or in a group"
 "Student raising hand","Hand is up for more than one second; clearly and purposefully raising hand."
 "Sitting","Teacher is sitting (chair, stool, floor, crouching, on desk, kneeling)."
 "Standing","Teacher is standing (in generally the same spot to maintain the same orientation to students)."
@@ -23,3 +24,5 @@
 "Individual technology","Student or teacher is using a laptop, tablet, etc."
 "Teacher writing","Teacher is inscribing on paper or on a board; includes erasing."
 "Student writing","Student is inscribing on paper or on a board; includes erasing."
+"Discourse","Students and Teacher talking."
+"No Action","There is no action by the Teacher or the Student."

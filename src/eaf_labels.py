@@ -39,7 +39,8 @@ def parse_eaf_annotations(eaf_file):
             value = annotation.find("ANNOTATION_VALUE").text or ""
             if value.strip():  # only if the annotation is non-empty
                 for time in range(start_time, end_time + 1):
-                    annotations_per_frame[time].append(formatted_tier_id)
+                    if formatted_tier_id is not []:
+                        annotations_per_frame[time].append(formatted_tier_id)
 
     return annotations_per_frame
 
