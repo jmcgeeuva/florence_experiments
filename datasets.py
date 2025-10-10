@@ -66,13 +66,16 @@ def get_actions_every_30s(eaf_path, step_ms=30000):
 # Preprocess the description list and file dictionary to preload all the data locations and timestamps into a dictionary
 # This way we will know exactly how many examples with have and will be able to load more data systematically
 # FIXME move preprocessing to outside the class and then have this as input into the class (do the train/test split outside too)
-def load_file_dict(video_path, annot_path):
+def load_file_dict(video_path, annot_path, stunt=None):
     vid_glob = glob.glob(osp.join(video_path, "*.mp4"))
     eaf_glob = glob.glob(osp.join(annot_path, "*.eaf"))
     eafs = [eaf.split("/")[-1] for eaf in eaf_glob]
     vids = [vid.split("/")[-1] for vid in vid_glob]
     descriptors = set([eaf.replace('.eaf', '') for eaf in eafs]) & set([eaf.replace('.mp4', '') for eaf in vids])
-    file_dict = OrderedDict({desc: {ext: osp.join(path, desc+'.'+ext) for path, ext in [(video_path, 'mp4'), (annot_path, 'eaf')]} for desc in descriptors})
+    if stunt is None:
+        file_dict = OrderedDict({desc: {ext: osp.join(path, desc+'.'+ext) for path, ext in [(video_path, 'mp4'), (annot_path, 'eaf')]} for desc in descriptors})
+    else:
+        file_dict = OrderedDict({desc: {ext: osp.join(path, desc+'.'+ext) for path, ext in [(video_path, 'mp4'), (annot_path, 'eaf')]} for desc in list(descriptors)[:int(len(descriptors)*stunt)]})
     for desc in list(file_dict.keys()):
         vid = file_dict[desc]['mp4']
         annot = file_dict[desc]['eaf']
@@ -88,7 +91,7 @@ def load_file_dict(video_path, annot_path):
     return file_dict
 
 class EducationDataset(data.Dataset):
-    def __init__(self, video_path, annot_path, file_dict, transform=None, train=True, seed=42, train_ratio=0.8):
+    def __init__(self, video_path, annot_path, file_dict, transform=None, train=True, seed=42, train_ratio=0.8, label_defs='./csv/label_definitions.csv', quiet=True):
         self.video_path = video_path
         self.annot_path = annot_path
         self.fps = 30
@@ -96,9 +99,10 @@ class EducationDataset(data.Dataset):
         self.transform = transform
         self.train = train
         self.file_dict = file_dict
+        self.quiet = quiet
 
 
-        df = pd.read_csv('./csv/label_definitions.csv', header=None, names=['label', 'definition'], engine='python')
+        df = pd.read_csv(label_defs, header=None, names=['label', 'definition'], engine='python')
         self.gt_labels = [(row['label'], row['definition']) for index, row in df.iterrows() if index!=0]
         
         # deterministic split
@@ -123,8 +127,8 @@ class EducationDataset(data.Dataset):
             cumsum += length
         self.file_dict = tmp
 
-    def generate_ground_truth(self, labels, gt_labels):
-        all_labels = [label.lower() for label, _ in gt_labels]
+    def generate_ground_truth(self, labels):
+        all_labels = [label.lower() for label, _ in self.gt_labels]
         label_tensor = []
         corrections = {
             'Carpet or floor-sitting': 'Sitting on carpet or floor',
@@ -149,12 +153,16 @@ class EducationDataset(data.Dataset):
                     label = value
                     break
             if label.lower() not in all_labels:
-                print(f'[WARNING] "{label}" are not in the list of all labels')
+                if not self.quiet:
+                    print(f'[WARNING] "{label}" are not in the list of all labels')
+                continue
             else:
                 new_labels.append(label)
 
             idx = all_labels.index(label.lower())
             tensor[idx] = 1
+        if all(x == 0 for x in tensor):
+            tensor[-1] = 1
 
         return tensor
     
@@ -220,7 +228,7 @@ class EducationDataset(data.Dataset):
         labels = [label.strip() for label in actions]
         
         # Create ground truth for each frame
-        label_tensor = self.generate_ground_truth(labels, self.gt_labels)
+        label_tensor = self.generate_ground_truth(labels)
 
         if self.transform:
             ret_img_group = [img.resize((224, 224), Image.BILINEAR) for img in images]
