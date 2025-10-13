@@ -12,7 +12,7 @@ import torch
 import os
 
 ###### LISA ######
-import sys, csv, random, json, cv2 
+import sys, csv, json, cv2 
 import torch.nn.functional as F
 import pandas as pd
 import numpy as np

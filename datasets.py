@@ -5,7 +5,6 @@ from src.timestamp_captions import get_timestamp_captions, create_caption_embedd
 from src.eaf_labels import get_eaf_labels
 import pandas as pd
 import torch
-import random
 import cv2
 from PIL import Image, ImageDraw, ImageFont 
 from torchvision import transforms
@@ -72,32 +71,38 @@ def load_file_dict(video_path, annot_path, stunt=None):
     eafs = [eaf.split("/")[-1] for eaf in eaf_glob]
     vids = [vid.split("/")[-1] for vid in vid_glob]
     descriptors = set([eaf.replace('.eaf', '') for eaf in eafs]) & set([eaf.replace('.mp4', '') for eaf in vids])
-    if stunt is None:
-        file_dict = OrderedDict({desc: {ext: osp.join(path, desc+'.'+ext) for path, ext in [(video_path, 'mp4'), (annot_path, 'eaf')]} for desc in descriptors})
-    else:
-        file_dict = OrderedDict({desc: {ext: osp.join(path, desc+'.'+ext) for path, ext in [(video_path, 'mp4'), (annot_path, 'eaf')]} for desc in list(descriptors)[:int(len(descriptors)*stunt)]})
-    for desc in list(file_dict.keys()):
-        vid = file_dict[desc]['mp4']
-        annot = file_dict[desc]['eaf']
-        try:
-            frame_annotations = get_actions_every_30s(annot)
-            file_dict[desc]['timestamps'] = [action['timestamp_ms'] for action in frame_annotations]
-            file_dict[desc]['actions'] = [action['actions'] for action in frame_annotations]
-        except:
-            print(f'[WARNING] Removing {desc} because the eaf is empty')
+    file_dict = dict({desc: {ext: osp.join(path, desc+'.'+ext) for path, ext in [(video_path, 'mp4'), (annot_path, 'eaf')]} for desc in descriptors})
+    cnt = 0
+    for desc in sorted(list(file_dict.keys())):
+        if cnt < int(len(descriptors)*stunt):
+            vid = file_dict[desc]['mp4']
+            annot = file_dict[desc]['eaf']
+            file_dict[desc]['timestamps'] = None
+            file_dict[desc]['actions'] = None
+            try:
+                frame_annotations = get_actions_every_30s(annot)
+                file_dict[desc]['timestamps'] = [action['timestamp_ms'] for action in frame_annotations]
+                file_dict[desc]['actions'] = [action['actions'] for action in frame_annotations]
+                cnt += 1
+            except:
+                print(f'[WARNING] Removing {desc} because the eaf is empty')
+                del file_dict[desc]
+                continue
+        else:
             del file_dict[desc]
-            continue
-    desc_list = list(file_dict.keys())
-    return file_dict
+            cnt += 1
+            
+
+    desc_list = sorted(list(file_dict.keys()))
+    return file_dict, desc_list
 
 class EducationDataset(data.Dataset):
-    def __init__(self, video_path, annot_path, file_dict, desc_list, transform=None, train=True, seed=42, size=224, train_ratio=0.8, label_defs='./csv/label_definitions.csv', quiet=True):
+    def __init__(self, video_path, annot_path, file_dict, desc_list, transform=None, seed=42, size=224, train_ratio=0.8, label_defs='./csv/label_definitions.csv', quiet=True):
         self.video_path = video_path
         self.annot_path = annot_path
         self.fps = 30
         self.time_frame = 900 # every 30 minutes
         self.transform = transform
-        self.train = train
         self.file_dict = file_dict
         self.desc_list = desc_list
         self.quiet = quiet
@@ -107,18 +112,6 @@ class EducationDataset(data.Dataset):
         df = pd.read_csv(label_defs, header=None, names=['label', 'definition'], engine='python')
         self.gt_labels = [(row['label'], row['definition']) for index, row in df.iterrows() if index!=0]
         
-        # # deterministic split
-        # desc_list = list(self.file_dict.keys())
-        # np.random.seed(seed)
-        # indices = np.arange(len(desc_list))
-        # np.random.shuffle(indices)
-        # split_idx = int(train_ratio * len(indices))
-
-        # if train:
-        #     indices = indices[:split_idx]
-        # else:
-        #     indices = indices[split_idx:]
-        # self.desc_list = [desc_list[ind] for ind in indices]
         cumsum = 0
         tmp = {}
         for desc in self.desc_list:
@@ -245,7 +238,7 @@ if __name__ == "__main__":
     batch_size = 32
     workers = 3
 
-    file_dict = load_file_dict(vid_dir, annot_dir)
+    file_dict, desc_list = load_file_dict(vid_dir, annot_dir)
     edu = EducationDataset(vid_dir, annot_dir, file_dict, transform=transforms.ToTensor())
     edu_test = EducationDataset(vid_dir, annot_dir, file_dict, transform=transforms.ToTensor(), train=False)
 

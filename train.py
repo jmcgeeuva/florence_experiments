@@ -422,7 +422,7 @@ def main():
         epochs=50
         lr=1e-3
         # momentum=0.9
-        seed=None
+        seed=777
         edu_seed=42
         mode='adamw'
         # weight_decay=0.2
@@ -447,19 +447,8 @@ def main():
 
     cfg = Cfg()
     
-    flo_model, processor = flor2.load("BASE_FT", device, lora=cfg.lora)
-    if cfg.debug:
-        flo_model = flo_model.to(device)
-    else:
-        flo_model = torch.nn.DataParallel(flo_model).cuda()
-
-    print('Load file dictionary...')
-    file_dict = load_file_dict(cfg.vid_dir, cfg.annot_dir, stunt=cfg.stunt)
-
-    print('Set up education dataset and test...')
-    
     if cfg.seed is not None:
-        seed = int(config.seed)
+        seed = int(cfg.seed)
         torch.manual_seed(seed) 
         torch.cuda.manual_seed(seed)  # For GPU operations
         torch.cuda.manual_seed_all(seed)  # If using multiple GPUs
@@ -474,19 +463,22 @@ def main():
         np.random.seed(seed) 
         cfg.seed = seed
     print(f'SEED: {seed}')
+
+    print('Load file dictionary...')
+    file_dict, desc_list = load_file_dict(cfg.vid_dir, cfg.annot_dir, stunt=cfg.stunt)
+
+    print('Set up education dataset and test...')
     
     # determine the train-test split
-    desc_list = list(file_dict.keys())
     indices = np.arange(len(desc_list))
     np.random.shuffle(indices)
     split_idx = int(.8 * len(indices))
     train_desc_list = [desc_list[ind] for ind in indices[:split_idx]]
     test_desc_list = [desc_list[ind] for ind in indices[split_idx:]]
 
-    edu = EducationDataset(cfg.vid_dir, cfg.annot_dir, file_dict, train_desc_list, transform=transforms.ToTensor(), train=True, size=cfg.size, label_defs=cfg.label_defs, seed=cfg.edu_seed)
-    edu_test = EducationDataset(cfg.vid_dir, cfg.annot_dir, file_dict, test_desc_list, transform=transforms.ToTensor(), train=False, size=cfg.size, label_defs=cfg.label_defs, seed=cfg.edu_seed)
+    edu = EducationDataset(cfg.vid_dir, cfg.annot_dir, file_dict, train_desc_list, transform=transforms.ToTensor(), size=cfg.size, label_defs=cfg.label_defs, seed=cfg.edu_seed)
+    edu_test = EducationDataset(cfg.vid_dir, cfg.annot_dir, file_dict, test_desc_list, transform=transforms.ToTensor(), size=cfg.size, label_defs=cfg.label_defs, seed=cfg.edu_seed)
     print(f'There are {len(list(edu.get_file_dict().keys()))} video-eaf pairs')
-
 
     def collate_fn(batch):
         image, timestamp, label = zip(*batch)
@@ -499,11 +491,18 @@ def main():
     train_loader = DataLoader( edu, batch_size=cfg.batch_size, num_workers=cfg.workers, shuffle=False, pin_memory=False, drop_last=True,  collate_fn=collate_fn)
     test_loader = DataLoader( edu_test, batch_size=cfg.batch_size, num_workers=cfg.workers, shuffle=False, pin_memory=False, drop_last=True,  collate_fn=collate_fn)
 
-    optimizer = _optimizer(cfg, flo_model, debug=cfg.debug, mode=cfg.mode)
-    # lr_scheduler = _lr_scheduler(cfg, optimizer)
-
     print(f'There are {len(train_loader)*cfg.batch_size} samples')
     print(f'There are {len(test_loader)*cfg.batch_size} samples')
+
+    
+    flo_model, processor = flor2.load("BASE_FT", device, lora=cfg.lora)
+    if cfg.debug:
+        flo_model = flo_model.to(device)
+    else:
+        flo_model = torch.nn.DataParallel(flo_model).cuda()
+
+    optimizer = _optimizer(cfg, flo_model, debug=cfg.debug, mode=cfg.mode)
+    # lr_scheduler = _lr_scheduler(cfg, optimizer)
 
     validate(test_loader, flo_model, processor, cfg.prompt, edu.gt_labels, -1, cfg.solver.epochs, loss_img_to_txt, loss_ce, cfg, debug=cfg.debug)
 
