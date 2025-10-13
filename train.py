@@ -36,6 +36,9 @@ import numpy as np
 from sklearn.metrics import confusion_matrix, multilabel_confusion_matrix, classification_report
 from sklearn.utils.multiclass import unique_labels
 from utils.lr_scheduler import WarmupMultiStepLR, WarmupCosineAnnealingLR
+from dotmap import DotMap
+import argparse
+import yaml
 
 # https://medium.com/@elsayed_mohamed/florence-2-vlm-fine-tuning-on-custom-dataset-3dd231585091
 from transformers import get_scheduler
@@ -401,51 +404,21 @@ def _optimizer(config, flo_model, debug=False, mode='adamw'):
 #     return lr_scheduler
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', '-cfg', default='')
+    # parser.add_argument('--log_time', default='')
+    args = parser.parse_args()
+    with open(args.config, 'r') as f:
+        config = yaml.safe_load(f)
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    # 
-    
+
     # set up loss functions
     loss_ce = torch.nn.BCEWithLogitsLoss()
     loss_img_to_txt = KLLoss()
     loss_txt_to_img = KLLoss()
-    
-    # For config file
-    class Cfg():
-        vid_dir = "/standard/spencerNSF/NeuralNetworksProjectVideos/314hours/Videos_314 Hours/"
-        annot_dir = "/standard/spencerNSF/NeuralNetworksProjectVideos/314hours/Video Annotations_314 Hours/"
-        prompt = '<MORE_DETAILED_CAPTION>'
-        batch_size = 8
-        workers = 8
-        debug=False
-        stunt=.05
-        label_defs='/scratch/tkg5kq/sandbox/florence_experiments/csv/label_definitions_limited.csv'
-        epochs=50
-        lr=1e-3
-        # momentum=0.9
-        seed=777
-        edu_seed=42
-        mode='adamw'
-        # weight_decay=0.2
-        schedule=False
-        ce = 1
-        info=0
-        option='1'
-        name='test'
-        freeze_fc=True
-        lora=False
-        size=512
-        freq = 2
-        print=False
-        
-        class Solver():
-            epochs= 50
-            # type= 'cosine'
-            # lr_warmup_step= 5
-            # lr_decay_step= 15
-            
-        solver = Solver()
 
-    cfg = Cfg()
+    cfg = DotMap(config)
     
     if cfg.seed is not None:
         seed = int(cfg.seed)
