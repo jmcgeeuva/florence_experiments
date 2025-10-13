@@ -91,7 +91,7 @@ def load_file_dict(video_path, annot_path, stunt=None):
     return file_dict
 
 class EducationDataset(data.Dataset):
-    def __init__(self, video_path, annot_path, file_dict, transform=None, train=True, seed=42, size=224, train_ratio=0.8, label_defs='./csv/label_definitions.csv', quiet=True):
+    def __init__(self, video_path, annot_path, file_dict, desc_list, transform=None, train=True, seed=42, size=224, train_ratio=0.8, label_defs='./csv/label_definitions.csv', quiet=True):
         self.video_path = video_path
         self.annot_path = annot_path
         self.fps = 30
@@ -99,6 +99,7 @@ class EducationDataset(data.Dataset):
         self.transform = transform
         self.train = train
         self.file_dict = file_dict
+        self.desc_list = desc_list
         self.quiet = quiet
         self.size = size
 
@@ -106,18 +107,18 @@ class EducationDataset(data.Dataset):
         df = pd.read_csv(label_defs, header=None, names=['label', 'definition'], engine='python')
         self.gt_labels = [(row['label'], row['definition']) for index, row in df.iterrows() if index!=0]
         
-        # deterministic split
-        desc_list = list(self.file_dict.keys())
-        np.random.seed(seed)
-        indices = np.arange(len(desc_list))
-        np.random.shuffle(indices)
-        split_idx = int(train_ratio * len(indices))
+        # # deterministic split
+        # desc_list = list(self.file_dict.keys())
+        # np.random.seed(seed)
+        # indices = np.arange(len(desc_list))
+        # np.random.shuffle(indices)
+        # split_idx = int(train_ratio * len(indices))
 
-        if train:
-            indices = indices[:split_idx]
-        else:
-            indices = indices[split_idx:]
-        self.desc_list = [desc_list[ind] for ind in indices]
+        # if train:
+        #     indices = indices[:split_idx]
+        # else:
+        #     indices = indices[split_idx:]
+        # self.desc_list = [desc_list[ind] for ind in indices]
         cumsum = 0
         tmp = {}
         for desc in self.desc_list:

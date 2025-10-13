@@ -457,26 +457,35 @@ def main():
     file_dict = load_file_dict(cfg.vid_dir, cfg.annot_dir, stunt=cfg.stunt)
 
     print('Set up education dataset and test...')
-    edu = EducationDataset(cfg.vid_dir, cfg.annot_dir, file_dict, transform=transforms.ToTensor(), train=True, size=cfg.size, label_defs=cfg.label_defs, seed=cfg.edu_seed)
-    edu_test = EducationDataset(cfg.vid_dir, cfg.annot_dir, file_dict, transform=transforms.ToTensor(), train=False, size=cfg.size, label_defs=cfg.label_defs, seed=cfg.edu_seed)
-    print(f'There are {len(list(edu.get_file_dict().keys()))} video-eaf pairs')
     
-    # if cfg.seed is not None:
-    #     seed = int(config['seed'])
-    #     torch.manual_seed(seed) 
-    #     torch.cuda.manual_seed(seed)  # For GPU operations
-    #     torch.cuda.manual_seed_all(seed)  # If using multiple GPUs
-    #     random.seed(seed)
-    #     np.random.seed(seed) 
-    # else:
-    #     seed = int(random.random()*10e7)
-    #     torch.manual_seed(seed) 
-    #     torch.cuda.manual_seed(seed)  # For GPU operations
-    #     torch.cuda.manual_seed_all(seed)  # If using multiple GPUs
-    #     random.seed(seed)
-    #     np.random.seed(seed) 
-    #     cfg.seed = seed
-    # print(f'SEED: {seed}')
+    if cfg.seed is not None:
+        seed = int(config.seed)
+        torch.manual_seed(seed) 
+        torch.cuda.manual_seed(seed)  # For GPU operations
+        torch.cuda.manual_seed_all(seed)  # If using multiple GPUs
+        random.seed(seed)
+        np.random.seed(seed) 
+    else:
+        seed = int(random.random()*10e7)
+        torch.manual_seed(seed) 
+        torch.cuda.manual_seed(seed)  # For GPU operations
+        torch.cuda.manual_seed_all(seed)  # If using multiple GPUs
+        random.seed(seed)
+        np.random.seed(seed) 
+        cfg.seed = seed
+    print(f'SEED: {seed}')
+    
+    # determine the train-test split
+    desc_list = list(file_dict.keys())
+    indices = np.arange(len(desc_list))
+    np.random.shuffle(indices)
+    split_idx = int(.8 * len(indices))
+    train_desc_list = [desc_list[ind] for ind in indices[:split_idx]]
+    test_desc_list = [desc_list[ind] for ind in indices[split_idx:]]
+
+    edu = EducationDataset(cfg.vid_dir, cfg.annot_dir, file_dict, train_desc_list, transform=transforms.ToTensor(), train=True, size=cfg.size, label_defs=cfg.label_defs, seed=cfg.edu_seed)
+    edu_test = EducationDataset(cfg.vid_dir, cfg.annot_dir, file_dict, test_desc_list, transform=transforms.ToTensor(), train=False, size=cfg.size, label_defs=cfg.label_defs, seed=cfg.edu_seed)
+    print(f'There are {len(list(edu.get_file_dict().keys()))} video-eaf pairs')
 
 
     def collate_fn(batch):
