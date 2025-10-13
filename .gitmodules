@@ -1,3 +1,6 @@
 [submodule "florence_pytorch"]
 	path = florence_pytorch
 	url = https://github.com/jmcgeeuva/florence_pytorch.git
+[submodule "aiai_dataloader"]
+	path = aiai_dataloader
+	url = https://github.com/jmcgeeuva/aiai_dataloader.git

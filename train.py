@@ -3,6 +3,7 @@
 #   After training use flo_model.generate and see how the text output looks
 #   Compare MORE_DETAILED_CAPTION, DETAILED_CAPTION, and CAPTION
 #   How are the bounding boxes for the BB prompt?
+#   How does training <CAPTION> effect <DETAILED_CAPTION> or <MORE_DETAILED_CAPTION> and vice versa
 # TO TEST
 #   AdamW vs SGD
 #   Loss function infoNCE vs CE vs both (balancing them)
@@ -15,7 +16,7 @@ from src.visualize import visualize_cross_similarity
 from src.computations import get_captions, next_word_similarity, calculate_similarity, get_df
 from src.timestamp_captions import get_timestamp_captions, create_caption_embeddings, get_images, extract_region_and_label_embeddings
 from src.eaf_labels import get_eaf_labels
-from datasets import EducationDataset, load_file_dict
+from aiai_dataloader.datasets import EducationDataset, load_file_dict
 
 import florence_pytorch.florence.modeling_florence2 as flor2
 import torch
@@ -367,10 +368,10 @@ def _optimizer(config, flo_model, debug=False, mode='adamw'):
     text_params = filter(lambda p: (id(p) not in vision_params) and p.requires_grad, flo_model.parameters())
     if mode =='adamw':
         optimizer = optim.AdamW(text_params,
-                            betas=(0.9, 0.98), lr=config.lr, eps=1e-8,
+                            betas=(0.9, 0.98), lr=config.solver.lr, eps=1e-8,
                             weight_decay=.2)
     elif mode == 'sgd':
-        optimizer = optim.SGD(text_params, config.lr, momentum=config.momentum, weight_decay=config.weight_decay)
+        optimizer = optim.SGD(text_params, config.solver.lr, momentum=config.momentum, weight_decay=config.weight_decay)
     total_params = sum(p.numel() for p in flo_model.parameters())
     trainable_params = sum(p.numel() for p in flo_model.parameters() if p.requires_grad)
     print(f'PARAMS: {total_params}, Trainable: {trainable_params}')
@@ -449,8 +450,8 @@ def main():
     train_desc_list = [desc_list[ind] for ind in indices[:split_idx]]
     test_desc_list = [desc_list[ind] for ind in indices[split_idx:]]
 
-    edu = EducationDataset(cfg.vid_dir, cfg.annot_dir, file_dict, train_desc_list, transform=transforms.ToTensor(), size=cfg.size, label_defs=cfg.label_defs, seed=cfg.edu_seed)
-    edu_test = EducationDataset(cfg.vid_dir, cfg.annot_dir, file_dict, test_desc_list, transform=transforms.ToTensor(), size=cfg.size, label_defs=cfg.label_defs, seed=cfg.edu_seed)
+    edu = EducationDataset(cfg.vid_dir, cfg.annot_dir, file_dict, train_desc_list, transform=transforms.ToTensor(), size=cfg.size, label_defs=cfg.label_defs)
+    edu_test = EducationDataset(cfg.vid_dir, cfg.annot_dir, file_dict, test_desc_list, transform=transforms.ToTensor(), size=cfg.size, label_defs=cfg.label_defs)
     print(f'There are {len(list(edu.get_file_dict().keys()))} video-eaf pairs')
 
     def collate_fn(batch):
@@ -474,7 +475,7 @@ def main():
     else:
         flo_model = torch.nn.DataParallel(flo_model).cuda()
 
-    optimizer = _optimizer(cfg, flo_model, debug=cfg.debug, mode=cfg.mode)
+    optimizer = _optimizer(cfg, flo_model, debug=cfg.debug, mode=cfg.solver.mode)
     # lr_scheduler = _lr_scheduler(cfg, optimizer)
 
     validate(test_loader, flo_model, processor, cfg.prompt, edu.gt_labels, -1, cfg.solver.epochs, loss_img_to_txt, loss_ce, cfg, debug=cfg.debug)
