@@ -1,0 +1,30 @@
+seed: 777
+edu_seed: 42
+vid_dir: "/standard/spencerNSF/NeuralNetworksProjectVideos/314hours/Videos_314 Hours/"
+annot_dir: "/standard/spencerNSF/NeuralNetworksProjectVideos/314hours/Video Annotations_314 Hours/"
+prompt: '<MORE_DETAILED_CAPTION>'
+batch_size: 8
+workers: 8
+debug: False
+stunt: .05
+label_defs: '/scratch/tkg5kq/sandbox/florence_experiments/csv/label_definitions_limited.csv'
+epochs: 50
+lr: 1.0e-3
+# momentum: 0.9
+mode: 'adamw'
+# weight_decay: 0.2
+schedule: False
+ce: 1
+info: 0
+option: '1'
+name: 'test'
+freeze_fc: True
+lora: False
+size: 512
+freq: 2
+print: False
+solver:
+    epochs: 50
+    # type: 'cosine'
+    # lr_warmup_step: 5
+    # lr_decay_step: 15
