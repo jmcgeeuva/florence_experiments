@@ -91,7 +91,7 @@ def load_file_dict(video_path, annot_path, stunt=None):
     return file_dict
 
 class EducationDataset(data.Dataset):
-    def __init__(self, video_path, annot_path, file_dict, transform=None, train=True, seed=42, train_ratio=0.8, label_defs='./csv/label_definitions.csv', quiet=True):
+    def __init__(self, video_path, annot_path, file_dict, transform=None, train=True, seed=42, size=224, train_ratio=0.8, label_defs='./csv/label_definitions.csv', quiet=True):
         self.video_path = video_path
         self.annot_path = annot_path
         self.fps = 30
@@ -100,6 +100,7 @@ class EducationDataset(data.Dataset):
         self.train = train
         self.file_dict = file_dict
         self.quiet = quiet
+        self.size = size
 
 
         df = pd.read_csv(label_defs, header=None, names=['label', 'definition'], engine='python')
@@ -231,7 +232,7 @@ class EducationDataset(data.Dataset):
         label_tensor = self.generate_ground_truth(labels)
 
         if self.transform:
-            ret_img_group = [img.resize((224, 224), Image.BILINEAR) for img in images]
+            ret_img_group = [img.resize((self.size, self.size), Image.BILINEAR) for img in images]
             images = self.transform(ret_img_group[0])
 
         
