@@ -33,12 +33,13 @@ import torch.nn.functional as F
 from typing import Optional
 import matplotlib.pyplot as plt
 import numpy as np
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, multilabel_confusion_matrix, classification_report
 from sklearn.utils.multiclass import unique_labels
 from utils.lr_scheduler import WarmupMultiStepLR, WarmupCosineAnnealingLR
 
 # https://medium.com/@elsayed_mohamed/florence-2-vlm-fine-tuning-on-custom-dataset-3dd231585091
 from transformers import get_scheduler
+from utils.KLLoss import KLLoss, gen_multi_label
 
 def pad_with_preserved_tokens(seqs, start_token=0, end_token=2, pad_value=0):
     """
@@ -121,7 +122,8 @@ def calculate_accuracy(matrix, labels):
     tp = 0
     tn = 0
     for mat, label_list in zip(matrix, labels):
-        mat_list = [1.0 if x > 1/len(label_list) else 0.0 for x in mat.tolist()]
+        mat_list = ((matrix/torch.sum(matrix, dim=1).unsqueeze(dim=1)) > (1/11 + .01)).to(device='cpu', dtype=torch.float)
+        # mat_list = [1.0 if x > 1/len(label_list) else 0.0 for x in mat.tolist()]
         for pred, label in zip(mat_list, label_list):
             if label == pred:
                 if label == 1:
@@ -156,133 +158,6 @@ def calculate_accuracy_old(matrix, labels):
         labeled_ids.append(indices_k.tolist())
         correct_ids.append(indices)
     return num, corr_k, labeled_ids, correct_ids
-
-def plot_confusion_matrix(y_true, y_pred, classes, name,
-                          normalize=False,
-                          title=None,
-                          cmap=plt.cm.Blues):
-    """
-    This function prints and plots the confusion matrix.
-    Normalization can be applied by setting `normalize=True`.
-    """
-    if not title:
-        if normalize:
-            title = 'Normalized confusion matrix'
-        else:
-            title = 'Confusion matrix, without normalization'
-
-    # Compute confusion matrix
-
-    # new_pred = []
-    # new_true = []
-    # for i, gt in enumerate(y_true):
-    #     pred = y_pred[i]
-    #     # Find the predictions that were correct through the intersection
-    #     intersection = [i for i, (a, b) in enumerate(zip(gt, pred)) if a == b]
-    #     if intersection:
-    #         preds = []
-    #         trues = []
-    #         for ind in intersection:
-    #             preds.append(gt[ind])
-    #             trues.append(pred[ind])
-    #         new_pred.extend(preds)
-    #         new_true.extend(trues)
-    #     # find the indices that are only in y_pred
-    #     difference = [i for i, (a, b) in enumerate(zip(gt, pred)) if a != b]
-    #     if difference:
-    #         preds = []
-    #         trues = []
-    #         for ind in difference:
-    #             preds.append(gt[ind])
-    #             trues.append(pred[ind])
-    #         new_pred.extend(preds)
-    #         new_true.extend(trues)
-
-    import pdb; pdb.set_trace()
-    cm = multilabel_confusion_matrix(y_true, y_pred)
-
-    # Only use the labels that appear in the data
-    classes = classes[unique_labels(new_true, new_pred)]
-    if normalize:
-        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
-        print("Normalized confusion matrix")
-    else:
-        print('Confusion matrix, without normalization')
-
-    # print(cm)
-
-    with open(f'confusion_{name}.txt', 'w') as f:
-        for i, el in enumerate(cm):
-            classname = str(classes[i][0]).replace('-', '_').replace(' ', '_')
-            f.write(f'{classname},')
-            for np_entry in el:
-                f.write(f'{np_entry},')
-            f.write('\n')
-
-    fig, ax = plt.subplots()
-    im = ax.imshow(cm, interpolation='nearest', cmap=cmap)
-    ax.figure.colorbar(im, ax=ax)
-    # We want to show all ticks...
-    ax.set(xticks=np.arange(cm.shape[1]),
-           yticks=np.arange(cm.shape[0]),
-           # ... and label them with the respective list entries
-           xticklabels=classes, yticklabels=classes,
-           title=title,
-           ylabel='True label',
-           xlabel='Predicted label')
-
-    # Rotate the tick labels and set their alignment.
-    plt.setp(ax.get_xticklabels(), rotation=45, ha="right",
-             rotation_mode="anchor")
-
-    # Loop over data dimensions and create text annotations.
-    # fmt = '.2f' if normalize else 'd'
-    # thresh = cm.max() / 2.
-    # for i in range(cm.shape[0]):
-    #     for j in range(cm.shape[1]):
-    #         ax.text(j, i, format(cm[i, j], fmt),
-    #                 ha="center", va="center",
-    #                 color="white" if cm[i, j] > thresh else "black")
-
-    fig.tight_layout()
-    plt.savefig(f'{name}.png')
-    plt.clf()
-
-def validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, epochs, loss_ce, cfg, debug=False):
-    flo_model.eval()
-    total_num = 0
-    total_corr = 0
-    total_tp = 0
-    total_tn = 0
-    total_labeled_ids = []
-    total_correct_ids = []
-    train_loss = 0
-    with torch.no_grad():
-        for (images, timestamp, labels) in tqdm(test_loader, total=len(test_loader)):
-            img_out_mean, lab_out_mean = create_img_and_label_embeddings(flo_model, processor, prompt, images, gt_labels, cfg, debug=debug)
-            _, matrix = cross_similarity(img_out_mean, lab_out_mean)
-            loss = loss_ce(matrix, labels.to(device=matrix.device, dtype=torch.float))
-            if cfg.option == '1':
-                num, corr_k, labeled_ids, correct_ids = calculate_accuracy_old(matrix, labels)
-            elif cfg.option == '2':
-                num, corr_k, tp, tn, labeled_ids, correct_ids = calculate_accuracy(matrix, labels)
-                total_tp += tp
-                total_tn += tn
-            total_num += num
-            total_corr += corr_k
-            
-            train_loss += loss.item()
-                
-            # Two lists of lists where each element of the list is a list of predicted labels and a list of correct labels
-            total_labeled_ids.extend(labels.tolist())
-            total_correct_ids.extend(correct_ids)
-
-    plot_confusion_matrix(total_correct_ids, total_labeled_ids, np.array(gt_labels), cfg.name)
-    
-    if cfg.option == '2':
-        print(f'Epoch: [{epoch+1}/{epochs}]: Test Loss: {train_loss/len(test_loader)}, Top1: {total_corr}/{total_num} = {(total_corr/total_num)*100}%, ({total_tp}+{total_tn})/{total_num} = {((total_tp+total_tn)/total_num)*100}%')
-    else:
-        print(f'Epoch: [{epoch+1}/{epochs}]: Test Loss: {train_loss/len(test_loader)}, Top1: {total_corr}/{total_num} = {(total_corr/total_num)*100}%')
 
 def contrastive_info_nce(
     batch_embs: torch.Tensor,
@@ -329,48 +204,98 @@ def contrastive_info_nce(
 
     return per_sample_loss.mean()
 
+def plot_confusion_matrix(y_true, y_pred, classes, name,
+                          normalize=False,
+                          title=None,
+                          cmap=plt.cm.Blues):
+    """
+    This function prints and plots the confusion matrix.
+    Normalization can be applied by setting `normalize=True`.
+    """
+    if not title:
+        if normalize:
+            title = 'Normalized confusion matrix'
+        else:
+            title = 'Confusion matrix, without normalization'
 
+    cm = multilabel_confusion_matrix(y_true, y_pred)
 
-def train(train_loader, test_loader, flo_model, processor, optimizer, prompt, gt_labels, loss_info, loss_ce, lr_scheduler, cfg, debug=False):
-    epochs = cfg.solver.epochs
-    freq = 4
-    debug_freq = len(train_loader)  + 1
+    # Only use the labels that appear in the data
+    if normalize:
+        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+        print("Normalized confusion matrix")
+    else:
+        print('Confusion matrix, without normalization')
 
-    for epoch in range(epochs):
+    # print(cm)
+
+    with open(f'confusion_{name}.txt', 'w') as f:
+        f.write(classification_report(y_true,y_pred, target_names=[classname[0].replace('-', '_').replace(' ', '_') for classname in classes]))
+
+def get_loss(loss_ce, loss_img_to_txt, img_to_txt_logits, img_out_mean, lab_out_mean, labels):
+    labels = labels.to(device=img_to_txt_logits.device, dtype=torch.float)
+    ground_truth = gen_multi_label(labels, img_to_txt_logits.device)
+    ce_loss = loss_ce(img_to_txt_logits, labels)
+    # info_loss = contrastive_info_nce(batch_embs=img_out_mean, label_embs=lab_out_mean, targets=labels, temperature=0.07)
+    # img_to_txt = loss_img_to_txt(img_to_txt_logits, ground_truth)
+    return ce_loss #.6ce_loss+ .4*info_loss
+
+def validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, epochs, loss_img_to_txt, loss_ce, cfg, debug=False):
+    flo_model.eval()
+    total_num = 0
+    total_corr = 0
+    total_labeled_ids = []
+    total_correct_ids = []
+    train_loss = 0
+    with torch.no_grad():
+        for (images, timestamp, labels) in tqdm(test_loader, total=len(test_loader)):
+            img_out_mean, lab_out_mean = create_img_and_label_embeddings(flo_model, processor, prompt, images, gt_labels, cfg, debug=debug)
+            _, img_to_txt_logits = cross_similarity(img_out_mean, lab_out_mean)
+            loss = get_loss(loss_ce, loss_img_to_txt, img_to_txt_logits, img_out_mean, lab_out_mean, labels)
+            if cfg.option == '1':
+                num, corr_k, labeled_ids, correct_ids = calculate_accuracy_old(img_to_txt_logits, labels)
+            elif cfg.option == '2':
+                num, corr_k, tp, tn, labeled_ids, correct_ids = calculate_accuracy(img_to_txt_logits, labels)
+            total_num += num
+            total_corr += corr_k
+            
+            train_loss += loss.item()
+                
+            # Two lists of lists where each element of the list is a list of predicted labels and a list of correct labels
+            total_labeled_ids.extend(((img_to_txt_logits/torch.sum(img_to_txt_logits, dim=1).unsqueeze(dim=1)) > (1/11 + .01)).to(device='cpu', dtype=torch.float))
+            total_correct_ids.extend(labels.tolist())
+
+    if cfg.print:
+        plot_confusion_matrix(total_correct_ids, total_labeled_ids, np.array(gt_labels), cfg.name)
+    
+    print(f'Epoch: [{epoch+1}/{epochs}]: Test Loss: {train_loss/len(test_loader)}, Top1: {total_corr}/{total_num} = {(total_corr/total_num)*100}%')
+
+def train(train_loader, test_loader, flo_model, processor, optimizer, prompt, gt_labels, loss_img_to_txt, loss_ce, lr_scheduler, cfg, debug=False):
+    for epoch in range(cfg.solver.epochs):
         debug_count = 0
         train_loss = 0
         flo_model.train()
         for kkk, (images, timestamp, labels) in enumerate(tqdm(train_loader, total=len(train_loader))):
-            if cfg.schedule:
-                if (kkk+1) == 1 or (kkk+1) % 10 == 0:
-                    lr_scheduler.step(epoch + kkk / len(train_loader))
+            # if cfg.schedule:
+            #     if (kkk+1) == 1 or (kkk+1) % 10 == 0:
+            #         lr_scheduler.step(epoch + kkk / len(train_loader))
+            optimizer.zero_grad()
 
             img_out_mean, lab_out_mean = create_img_and_label_embeddings(flo_model, processor, prompt, images, gt_labels, cfg, debug=debug)
-            _, matrix = cross_similarity(img_out_mean, lab_out_mean)
-            labels = labels.to(device=matrix.device, dtype=torch.float)
+            _, img_to_txt_logits = cross_similarity(img_out_mean, lab_out_mean)
+            # _, txt_to_img_logits = cross_similarity(lab_out_mean, img_out_mean)
+            labels = labels.to(device=img_to_txt_logits.device, dtype=torch.float)
 
-            # mat_list = matrix > 1/labels.shape[1]
-            # ce_loss = loss_ce(mat_list.to(dtype=float), labels)
-            ce_loss = loss_ce(matrix, labels.to(dtype=torch.float))
-            # info_loss = contrastive_info_nce(batch_embs=img_out_mean, label_embs=lab_out_mean, targets=labels, temperature=0.07)
-            loss = ce_loss #+ cfg.info*info_loss #.6*ce_loss + .4*info_loss
+            loss = get_loss(loss_ce, loss_img_to_txt, img_to_txt_logits, img_out_mean, lab_out_mean, labels)
+            train_loss += loss.item()
+            
             loss.backward()
             optimizer.step()
-            if cfg.schedule:
-                lr_scheduler.step()
-            optimizer.zero_grad()
-            
-            train_loss += loss.item()
-
-            # if (debug_count+1) % debug_freq == 0:
-            #     num, corr_k, _, _ = calculate_accuracy_old(matrix, labels)
-            #     print(f'[{epoch+1}/{epochs}] Loss: {loss.item()}, Accuracy: {corr_k}/{num} = {(corr_k/num)*100}%')
-            # debug_count += 1
         
         avg_train_loss = train_loss / len(train_loader)
         print(f"Average Training Loss: {avg_train_loss}")
-        if epoch % freq == 0:
-            validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, epochs, loss_ce, cfg, debug=debug)
+        if (epoch+1) % cfg.freq == 0:
+            validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, cfg.solver.epochs, loss_img_to_txt, loss_ce, cfg, debug=debug)
     
     flo_model.eval()
     return flo_model
@@ -417,11 +342,10 @@ def get_actions_every_30s(eaf_path, step_ms=30000):
 
     return actions_at_steps
 
-def _optimizer(config, flo_model, lambdas=[], debug=False, mode='adamw'):
+def _optimizer(config, flo_model, debug=False, mode='adamw'):
     if not debug:
         flo_model = flo_model.module
     vision_params = list(map(id, flo_model.vision_tower.parameters()))
-    text_params = filter(lambda p: id(p) not in vision_params, flo_model.parameters())
     # Freeze weights
     if config.freeze_fc:
         for layer in flo_model.language_model.model.decoder.layers:
@@ -437,42 +361,44 @@ def _optimizer(config, flo_model, lambdas=[], debug=False, mode='adamw'):
     for param in flo_model.vision_tower.parameters():
         param.requires_grad = False
     # Train just the text parameters
+    text_params = filter(lambda p: (id(p) not in vision_params) and p.requires_grad, flo_model.parameters())
     if mode =='adamw':
         optimizer = optim.AdamW(text_params,
-                                betas=(0.9, 0.98), lr=config.lr, eps=1e-8,
-                                weight_decay=config.weight_decay)
+                            betas=(0.9, 0.98), lr=config.lr, eps=1e-8,
+                            weight_decay=.2)
     elif mode == 'sgd':
-        optimizer = optim.SGD(text_params, config.lr,
-                              momentum=config.momentum)#,
-                            #   weight_decay=config.weight_decay)
+        optimizer = optim.SGD(text_params, config.lr, momentum=config.momentum, weight_decay=config.weight_decay)
+    total_params = sum(p.numel() for p in flo_model.parameters())
+    trainable_params = sum(p.numel() for p in flo_model.parameters() if p.requires_grad)
+    print(f'PARAMS: {total_params}, Trainable: {trainable_params}')
     return optimizer
 
-def _lr_scheduler(cfg,optimizer):
-    solver = cfg.solver
-    if solver.type == 'cosine':
-        lr_scheduler = WarmupCosineAnnealingLR(
-            optimizer,
-            cfg.solver.epochs,
-            warmup_epochs=solver.lr_warmup_step
-        )
-    elif solver.type == 'multistep':
-        if isinstance(solver.lr_decay_step, list):
-            milestones = solver.lr_decay_step
-        elif isinstance(solver.lr_decay_step, int):
-            milestones = [
-                solver.lr_decay_step * (i + 1)
-                for i in range(cfg.solver.epochs //
-                               solver.lr_decay_step)]
-        else:
-            raise ValueError("error learning rate decay step: {}".format(type(solver.lr_decay_step)))
-        lr_scheduler = WarmupMultiStepLR(
-            optimizer,
-            milestones,
-            warmup_epochs=solver.lr_warmup_step
-        )
-    else:
-        raise ValueError('Unknown lr scheduler: {}'.format(solver.type))
-    return lr_scheduler
+# def _lr_scheduler(cfg,optimizer):
+#     solver = cfg.solver
+#     if solver.type == 'cosine':
+#         lr_scheduler = WarmupCosineAnnealingLR(
+#             optimizer,
+#             cfg.solver.epochs,
+#             warmup_epochs=solver.lr_warmup_step
+#         )
+#     elif solver.type == 'multistep':
+#         if isinstance(solver.lr_decay_step, list):
+#             milestones = solver.lr_decay_step
+#         elif isinstance(solver.lr_decay_step, int):
+#             milestones = [
+#                 solver.lr_decay_step * (i + 1)
+#                 for i in range(cfg.solver.epochs //
+#                                solver.lr_decay_step)]
+#         else:
+#             raise ValueError("error learning rate decay step: {}".format(type(solver.lr_decay_step)))
+#         lr_scheduler = WarmupMultiStepLR(
+#             optimizer,
+#             milestones,
+#             warmup_epochs=solver.lr_warmup_step
+#         )
+#     else:
+#         raise ValueError('Unknown lr scheduler: {}'.format(solver.type))
+#     return lr_scheduler
 
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -480,9 +406,8 @@ def main():
     
     # set up loss functions
     loss_ce = torch.nn.BCEWithLogitsLoss()
-    # loss_img_to_text = KLLoss()
-    # loss_img_to_text = KLLoss()
-    loss_info = None #SupervisedInfoNCE(temperature=0.07)
+    loss_img_to_txt = KLLoss()
+    loss_txt_to_img = KLLoss()
     
     # For config file
     class Cfg():
@@ -490,39 +415,34 @@ def main():
         annot_dir = "/standard/spencerNSF/NeuralNetworksProjectVideos/314hours/Video Annotations_314 Hours/"
         prompt = '<MORE_DETAILED_CAPTION>'
         batch_size = 8
-        workers = 16
+        workers = 8
         debug=False
         stunt=.05
         label_defs='/scratch/tkg5kq/sandbox/florence_experiments/csv/label_definitions_limited.csv'
         epochs=50
-        lr=1e-6
-        momentum=0.9
+        lr=1e-3
+        # momentum=0.9
         seed=None
         edu_seed=42
-        mode='sgd'
-        weight_decay=0.2
+        mode='adamw'
+        # weight_decay=0.2
         schedule=False
         ce = 1
         info=0
         option='1'
         name='test'
-        freeze_fc=False
+        freeze_fc=True
         lora=False
-        size=224
+        size=512
+        freq = 2
+        print=False
         
         class Solver():
-            type= 'cosine'
             epochs= 50
-            start_epoch= 0
-            epoch_offset= 0
-            lr_warmup_step= 5
-            lr_decay_step= 15
-            lr_decay_factor= 0.1
-            clip_gradient= 20
-            loss_type= 'nll'
-            evaluate= False
-            ratio= 1
-            f_ratio= 10
+            # type= 'cosine'
+            # lr_warmup_step= 5
+            # lr_decay_step= 15
+            
         solver = Solver()
 
     cfg = Cfg()
@@ -567,18 +487,18 @@ def main():
         labels = pad_sequence(label, batch_first=True, padding_value=-1)
         return image, timestamp, labels
 
-    train_loader = DataLoader( edu, batch_size=cfg.batch_size, num_workers=cfg.workers, shuffle=True, pin_memory=False, drop_last=True,  collate_fn=collate_fn)
+    train_loader = DataLoader( edu, batch_size=cfg.batch_size, num_workers=cfg.workers, shuffle=False, pin_memory=False, drop_last=True,  collate_fn=collate_fn)
     test_loader = DataLoader( edu_test, batch_size=cfg.batch_size, num_workers=cfg.workers, shuffle=False, pin_memory=False, drop_last=True,  collate_fn=collate_fn)
 
     optimizer = _optimizer(cfg, flo_model, debug=cfg.debug, mode=cfg.mode)
-    lr_scheduler = _lr_scheduler(cfg, optimizer)
+    # lr_scheduler = _lr_scheduler(cfg, optimizer)
 
     print(f'There are {len(train_loader)*cfg.batch_size} samples')
     print(f'There are {len(test_loader)*cfg.batch_size} samples')
 
-    validate(test_loader, flo_model, processor, cfg.prompt, edu.gt_labels, -1, cfg.solver.epochs, loss_ce, cfg, debug=cfg.debug)
+    validate(test_loader, flo_model, processor, cfg.prompt, edu.gt_labels, -1, cfg.solver.epochs, loss_img_to_txt, loss_ce, cfg, debug=cfg.debug)
 
-    train(train_loader, test_loader, flo_model, processor, optimizer, cfg.prompt, edu.gt_labels, loss_info, loss_ce, lr_scheduler, cfg, debug=cfg.debug)
+    train(train_loader, test_loader, flo_model, processor, optimizer, cfg.prompt, edu.gt_labels, loss_img_to_txt, loss_ce, None, cfg, debug=cfg.debug)
 
 if __name__ == '__main__':
     main()
