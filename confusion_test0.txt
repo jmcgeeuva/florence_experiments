@@ -1,0 +1,18 @@
+                                      precision    recall  f1-score   support
+
+                Whole_class_activity       0.00      0.00      0.00       304
+                          Transition       0.00      0.00      0.00         0
+On_task_student_talking_with_student       0.00      0.00      0.00         0
+                Student_raising_hand       0.00      0.00      0.00         0
+                             Sitting       0.00      0.00      0.00         0
+                            Standing       0.00      0.00      0.00       304
+          Sitting_on_carpet_or_floor       0.60      1.00      0.75       181
+             Sitting_at_group_tables       0.00      0.00      0.00         0
+                    Sitting_at_desks       0.40      1.00      0.57       121
+                           Discourse       0.00      0.00      0.00         0
+                           No_Action       0.00      0.00      0.00         0
+
+                           micro avg       0.22      0.33      0.26       910
+                           macro avg       0.09      0.18      0.12       910
+                        weighted avg       0.17      0.33      0.22       910
+                         samples avg       0.22      0.33      0.26       910

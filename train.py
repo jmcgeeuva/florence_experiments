@@ -8,7 +8,7 @@
 #   AdamW vs SGD
 #   Loss function infoNCE vs CE vs both (balancing them)
 #   Learning rates and scheduling learning rates
-#   Size of input image (224x224) vs (512x512)
+#   Size of input image (224x224) vs (512x512) vs (768x768)
 
 from src.similarities import cross_similarity
 from src.create_embeddings import create_embeddings as create_label_embeddings
@@ -236,13 +236,13 @@ def plot_confusion_matrix(y_true, y_pred, classes, name,
     with open(f'confusion_{name}.txt', 'w') as f:
         f.write(classification_report(y_true,y_pred, target_names=[classname[0].replace('-', '_').replace(' ', '_') for classname in classes]))
 
-def get_loss(loss_ce, loss_img_to_txt, img_to_txt_logits, img_out_mean, lab_out_mean, labels):
+def get_loss(loss_ce, loss_img_to_txt, img_to_txt_logits, img_out_mean, lab_out_mean, labels, config):
     labels = labels.to(device=img_to_txt_logits.device, dtype=torch.float)
     ground_truth = gen_multi_label(labels, img_to_txt_logits.device)
     ce_loss = loss_ce(img_to_txt_logits, labels)
-    # info_loss = contrastive_info_nce(batch_embs=img_out_mean, label_embs=lab_out_mean, targets=labels, temperature=0.07)
-    # img_to_txt = loss_img_to_txt(img_to_txt_logits, ground_truth)
-    return ce_loss #.6ce_loss+ .4*info_loss
+    info_loss = contrastive_info_nce(batch_embs=img_out_mean, label_embs=lab_out_mean, targets=labels, temperature=0.07)
+    img_to_txt = loss_img_to_txt(img_to_txt_logits, ground_truth)
+    return config.loss.ce*ce_loss + config.loss.info*info_loss + config.loss.i2t*img_to_txt
 
 def validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, epochs, loss_img_to_txt, loss_ce, cfg, debug=False):
     flo_model.eval()
@@ -255,7 +255,7 @@ def validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, epochs
         for (images, timestamp, labels) in tqdm(test_loader, total=len(test_loader)):
             img_out_mean, lab_out_mean = create_img_and_label_embeddings(flo_model, processor, prompt, images, gt_labels, cfg, debug=debug)
             _, img_to_txt_logits = cross_similarity(img_out_mean, lab_out_mean)
-            loss = get_loss(loss_ce, loss_img_to_txt, img_to_txt_logits, img_out_mean, lab_out_mean, labels)
+            loss = get_loss(loss_ce, loss_img_to_txt, img_to_txt_logits, img_out_mean, lab_out_mean, labels, cfg)
             if cfg.option == '1':
                 num, corr_k, labeled_ids, correct_ids = calculate_accuracy_old(img_to_txt_logits, labels)
             elif cfg.option == '2':
@@ -275,29 +275,37 @@ def validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, epochs
     print(f'Epoch: [{epoch+1}/{epochs}]: Test Loss: {train_loss/len(test_loader)}, Top1: {total_corr}/{total_num} = {(total_corr/total_num)*100}%')
 
 def train(train_loader, test_loader, flo_model, processor, optimizer, prompt, gt_labels, loss_img_to_txt, loss_ce, lr_scheduler, cfg, debug=False):
+    total_num = 0
+    total_corr = 0
     for epoch in range(cfg.solver.epochs):
         debug_count = 0
         train_loss = 0
         flo_model.train()
         for kkk, (images, timestamp, labels) in enumerate(tqdm(train_loader, total=len(train_loader))):
-            # if cfg.schedule:
-            #     if (kkk+1) == 1 or (kkk+1) % 10 == 0:
-            #         lr_scheduler.step(epoch + kkk / len(train_loader))
+            if cfg.solver.schedule and ((kkk+1) == 1 or (kkk+1) % 10 == 0):
+                lr_scheduler.step(epoch + kkk / len(train_loader))
             optimizer.zero_grad()
 
             img_out_mean, lab_out_mean = create_img_and_label_embeddings(flo_model, processor, prompt, images, gt_labels, cfg, debug=debug)
             _, img_to_txt_logits = cross_similarity(img_out_mean, lab_out_mean)
             # _, txt_to_img_logits = cross_similarity(lab_out_mean, img_out_mean)
             labels = labels.to(device=img_to_txt_logits.device, dtype=torch.float)
+            
+            if cfg.option == '1':
+                num, corr_k, labeled_ids, correct_ids = calculate_accuracy_old(img_to_txt_logits, labels)
+            elif cfg.option == '2':
+                num, corr_k, tp, tn, labeled_ids, correct_ids = calculate_accuracy(img_to_txt_logits, labels)
+            total_num += num
+            total_corr += corr_k
 
-            loss = get_loss(loss_ce, loss_img_to_txt, img_to_txt_logits, img_out_mean, lab_out_mean, labels)
+            loss = get_loss(loss_ce, loss_img_to_txt, img_to_txt_logits, img_out_mean, lab_out_mean, labels, cfg)
             train_loss += loss.item()
             
             loss.backward()
             optimizer.step()
         
         avg_train_loss = train_loss / len(train_loader)
-        print(f"Average Training Loss: {avg_train_loss}")
+        print(f"Average Training Loss: {avg_train_loss}, Accuracy: {total_corr}/{total_num} = {(total_corr/total_num)*100}%")
         if (epoch+1) % cfg.freq == 0:
             validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, cfg.solver.epochs, loss_img_to_txt, loss_ce, cfg, debug=debug)
     
@@ -377,32 +385,31 @@ def _optimizer(config, flo_model, debug=False, mode='adamw'):
     print(f'PARAMS: {total_params}, Trainable: {trainable_params}')
     return optimizer
 
-# def _lr_scheduler(cfg,optimizer):
-#     solver = cfg.solver
-#     if solver.type == 'cosine':
-#         lr_scheduler = WarmupCosineAnnealingLR(
-#             optimizer,
-#             cfg.solver.epochs,
-#             warmup_epochs=solver.lr_warmup_step
-#         )
-#     elif solver.type == 'multistep':
-#         if isinstance(solver.lr_decay_step, list):
-#             milestones = solver.lr_decay_step
-#         elif isinstance(solver.lr_decay_step, int):
-#             milestones = [
-#                 solver.lr_decay_step * (i + 1)
-#                 for i in range(cfg.solver.epochs //
-#                                solver.lr_decay_step)]
-#         else:
-#             raise ValueError("error learning rate decay step: {}".format(type(solver.lr_decay_step)))
-#         lr_scheduler = WarmupMultiStepLR(
-#             optimizer,
-#             milestones,
-#             warmup_epochs=solver.lr_warmup_step
-#         )
-#     else:
-#         raise ValueError('Unknown lr scheduler: {}'.format(solver.type))
-#     return lr_scheduler
+def _lr_scheduler(cfg,optimizer):
+    if cfg.solver.type == 'cosine':
+        lr_scheduler = WarmupCosineAnnealingLR(
+            optimizer,
+            cfg.solver.epochs,
+            warmup_epochs=cfg.solver.lr_warmup_step
+        )
+    elif cfg.solver.type == 'multistep':
+        if isinstance(cfg.solver.lr_decay_step, list):
+            milestones = cfg.solver.lr_decay_step
+        elif isinstance(cfg.solver.lr_decay_step, int):
+            milestones = [
+                cfg.solver.lr_decay_step * (i + 1)
+                for i in range(cfg.solver.epochs //
+                               cfg.solver.lr_decay_step)]
+        else:
+            raise ValueError("error learning rate decay step: {}".format(type(cfg.solver.lr_decay_step)))
+        lr_scheduler = WarmupMultiStepLR(
+            optimizer,
+            milestones,
+            warmup_epochs=solver.lr_warmup_step
+        )
+    else:
+        raise ValueError('Unknown lr scheduler: {}'.format(cfg.solver.type))
+    return lr_scheduler
 
 def main():
     parser = argparse.ArgumentParser()
@@ -476,11 +483,11 @@ def main():
         flo_model = torch.nn.DataParallel(flo_model).cuda()
 
     optimizer = _optimizer(cfg, flo_model, debug=cfg.debug, mode=cfg.solver.mode)
-    # lr_scheduler = _lr_scheduler(cfg, optimizer)
+    lr_scheduler = _lr_scheduler(cfg, optimizer)
 
     validate(test_loader, flo_model, processor, cfg.prompt, edu.gt_labels, -1, cfg.solver.epochs, loss_img_to_txt, loss_ce, cfg, debug=cfg.debug)
 
-    train(train_loader, test_loader, flo_model, processor, optimizer, cfg.prompt, edu.gt_labels, loss_img_to_txt, loss_ce, None, cfg, debug=cfg.debug)
+    train(train_loader, test_loader, flo_model, processor, optimizer, cfg.prompt, edu.gt_labels, loss_img_to_txt, loss_ce, lr_scheduler, cfg, debug=cfg.debug)
 
 if __name__ == '__main__':
     main()
