@@ -1,0 +1,35 @@
+seed: 777
+dataset: multithumos
+vid_dir: "/mnt/data_sdb/mmaction2/data/thumos14/"
+annot_dir: "/mnt/data_sdb/multithumos/annotations/"
+output_dir: './ckpt/'
+prompt: '<CAPTION>' # '<MORE_DETAILED_CAPTION>'
+batch_size: 8
+workers: 8
+label_defs: 'multilabels.csv'
+# momentum: 0.9
+# weight_decay: 0.2
+loss:
+    ce: 1
+    info: 0
+    i2t: 0
+option: '2'
+name: 'test2'
+size: 768
+# Parameters
+freeze_fc: True
+lora: False
+# Debugging and printing
+debug: False
+print: False
+stunt: .05
+freq: 1
+# Learning rates and optimizers
+solver:
+    epochs: 50
+    lr: 1.e-5
+    mode: 'adamw'
+    type: 'cosine'
+    lr_warmup_step: 5
+    lr_decay_step: 15
+    schedule: True

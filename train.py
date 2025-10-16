@@ -17,6 +17,7 @@ from src.computations import get_captions, next_word_similarity, calculate_simil
 from src.timestamp_captions import get_timestamp_captions, create_caption_embeddings, get_images, extract_region_and_label_embeddings
 from src.eaf_labels import get_eaf_labels
 from aiai_dataloader.datasets import EducationDataset, load_file_dict
+from thumos_dataloader import MultiTHUMOSDataset
 
 import florence_pytorch.florence.modeling_florence2 as flor2
 import torch
@@ -29,7 +30,6 @@ from torchvision import transforms
 from torch.utils.data import DataLoader
 import torch.optim as optim
 from tqdm import tqdm
-from infonce import SupervisedInfoNCE
 import torch.nn.functional as F
 from typing import Optional
 import matplotlib.pyplot as plt
@@ -71,8 +71,12 @@ def create_embeddings(flo_model, processor, gt_labels, debug=False):
     attention_mask = []
     if not debug:
         flo_model = flo_model.module
-    for label, definition in gt_labels:
+    for labels in gt_labels:
         # Process label
+        if type(labels) == type(tuple):
+            label, definition = labels
+        else:
+            label = labels
         tokens = processor.tokenizer(label)
         embedding_data.append(torch.tensor(tokens['input_ids'], device=flo_model.device))
         attention_mask.append(torch.tensor(tokens['attention_mask'], device=flo_model.device))
@@ -81,13 +85,13 @@ def create_embeddings(flo_model, processor, gt_labels, debug=False):
     inputs_embeds = torch.stack([flo_model.get_input_embeddings()(tensor) for tensor in input_ids])
     # 0 to ignore these masked tokens
     attention_mask = pad_with_preserved_tokens(attention_mask, pad_value=0)
-    
+
     return input_ids, inputs_embeds, attention_mask
-    
+
 def create_img_and_label_embeddings(flo_model, processor, prompt, sample, gt_labels, cfg, debug=False):
     prompts = [prompt for _ in sample]
     samples = [img for img in sample]
-    
+
     # Create prompt/sample inputs
     if not debug:
         model = flo_model.module
@@ -100,6 +104,7 @@ def create_img_and_label_embeddings(flo_model, processor, prompt, sample, gt_lab
     input_ids = inputs['input_ids'].to(device=model.device)
     pixel_values = inputs['pixel_values'].to(device=model.device)
     decoder_img_ids = flor2.shift_tokens_right(input_ids.to(dtype=int), model.config.pad_token_id, 0).to(device=model.device, dtype=int)
+
     img_out   = flo_model(input_ids = input_ids,
                         pixel_values = pixel_values,
                         decoder_input_ids = decoder_img_ids,
@@ -107,10 +112,10 @@ def create_img_and_label_embeddings(flo_model, processor, prompt, sample, gt_lab
 
     # Create all label embeddings in a list ordered by label name
     label_embeddings, label_embeddings_embeds, attention_mask = create_embeddings(flo_model, processor, gt_labels, debug=debug)
-    
+
     decoder_label_ids = flor2.shift_tokens_right(label_embeddings.to(dtype=int), model.config.pad_token_id, 0).to(device=model.device, dtype=int)
     label_out = flo_model(inputs_embeds=label_embeddings_embeds, output_hidden_states=True, attention_mask=attention_mask, decoder_input_ids=decoder_label_ids)
-    
+
 
     img_out_state = img_out.decoder_hidden_states[-1]
     lab_out_state = label_out.decoder_hidden_states[-1]
@@ -118,32 +123,50 @@ def create_img_and_label_embeddings(flo_model, processor, prompt, sample, gt_lab
     lab_out_mean = lab_out_state.mean(dim=1)
     return img_out_mean, lab_out_mean
 
-def calculate_accuracy(matrix, labels):
-    num = 0
-    corr_k = 0
-    labeled_ids = []
-    correct_ids = []
-    tp = 0
-    tn = 0
-    for mat, label_list in zip(matrix, labels):
-        mat_list = ((matrix/torch.sum(matrix, dim=1).unsqueeze(dim=1)) > (1/11 + .01)).to(device='cpu', dtype=torch.float)
-        # mat_list = [1.0 if x > 1/len(label_list) else 0.0 for x in mat.tolist()]
-        for pred, label in zip(mat_list, label_list):
-            if label == pred:
-                if label == 1:
-                    tp += 1
-                elif label == 0:
-                    tn += 1
-                corr_k += 1
-            num += 1
-        # find the indices where the gt is truly 1
-        indices = [i for i, x in enumerate(label_list) if x == 1]
-        # Get the top k guesses where k is the length of gt
-        values_k, indices_k = mat.topk(len(indices), dim=-1)
-        labeled_ids.append(indices_k.tolist())
-        correct_ids.append(indices)
-        
-    return num, corr_k, tp, tn, labeled_ids, correct_ids
+# https://fangdahan.medium.com/calculate-mean-average-precision-map-for-multi-label-classification-b082679d31be
+def calculate_accuracy(matrix, labels, threshold):
+    mat = (F.sigmoid(matrix) > 0.5).to(dtype=torch.float)
+
+    check      = (mat == labels)
+    yhat       = labels.to(dtype=torch.bool)
+    not_check  = torch.logical_not(check)
+    not_yhat   = torch.logical_not(yhat)
+
+    tp = torch.sum(torch.logical_and(yhat,     check).to(dtype=int), dim=0)
+    tn = torch.sum(torch.logical_and(not_yhat, check).to(dtype=int), dim=0)
+    fn = torch.sum(torch.logical_and(yhat,     not_check).to(dtype=int), dim=0)
+    fp = torch.sum(torch.logical_and(not_yhat, not_check).to(dtype=int), dim=0)
+
+    corr_k = torch.sum(check.to(dtype=int))
+    num    = check.shape[0]*check.shape[1]
+
+    assert corr_k == torch.sum(tp) + torch.sum(tn)
+    assert num == torch.sum(tp) + torch.sum(tn) + torch.sum(fp) + torch.sum(fn)
+
+    return num, corr_k, (tp, tn, fp, fn)
+
+def get_metrics(tp, tn, fp, fn):
+    p = tp/(tp+fp+1e-12)
+    r = tp/(tp+fn+1e-12)
+
+    #unique_r, inverse_indices = torch.unique(r, return_inverse=True)
+    #max_p_per_group = torch.zeros_like(unique_r)
+    #max_p_per_group = max_p_per_group.scatter_reduce(0, inverse_indices, p, reduce='amax', include_self=False)
+    #p_new = max_p_per_group[inverse_indices]
+
+    #idx = torch.arange(len(r))
+    #last_occurrence = scatter_last = torch.zeros_like(r, dtype=torch.bool)
+    #scatter_last = scatter_last.to(dtype=inverse_indices.dtype).scatter(0, inverse_indices, idx.to(dtype=inverse_indices.dtype))
+    #mask = (idx == scatter_last[inverse_indices])
+
+    #r_new = r.clone()
+    #r_new[~mask] = 0
+    #keep_mask = mask.int()
+
+    ap = p*r #torch.sum(p_new*keep_mask)/torch.sum(keep_mask)
+    map = ap.mean()
+    f1 = ((2*p*r)/(p+r+1e-12)).mean()
+    return f1, map
 
 def calculate_accuracy_old(matrix, labels):
     num = 0
@@ -159,9 +182,9 @@ def calculate_accuracy_old(matrix, labels):
             if ind in indices_k:
                 corr_k += 1
             num += 1
-        labeled_ids.append(indices_k.tolist())
-        correct_ids.append(indices)
-    return num, corr_k, labeled_ids, correct_ids
+        #labeled_ids.append(indices_k.tolist())
+        #correct_ids.append(indices)
+    return num, corr_k
 
 def contrastive_info_nce(
     batch_embs: torch.Tensor,
@@ -171,7 +194,7 @@ def contrastive_info_nce(
     normalize: bool = True,
     reduction: str = "mean",
     ignore_no_positive: bool = True) -> torch.Tensor:
-    
+
     B, D = batch_embs.shape
     L = label_embs.shape[0]
     device = batch_embs.device
@@ -244,43 +267,66 @@ def get_loss(loss_ce, loss_img_to_txt, img_to_txt_logits, img_out_mean, lab_out_
     img_to_txt = loss_img_to_txt(img_to_txt_logits, ground_truth)
     return config.loss.ce*ce_loss + config.loss.info*info_loss + config.loss.i2t*img_to_txt
 
-def validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, epochs, loss_img_to_txt, loss_ce, cfg, debug=False):
+def validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, epochs, loss_img_to_txt, loss_ce, cfg, threshold, debug=False):
     flo_model.eval()
     total_num = 0
     total_corr = 0
+    if cfg.debug:
+        model = flo_model
+    else:
+        model = flo_model.module
+    tp_all = torch.zeros(65, device=flo_model.device)
+    tn_all = torch.zeros(65, device=flo_model.device)
+    fp_all = torch.zeros(65, device=flo_model.device)
+    fn_all = torch.zeros(65, device=flo_model.device)
     total_labeled_ids = []
     total_correct_ids = []
     train_loss = 0
+    #threshold = (1/len(gt_labels)) + .01
     with torch.no_grad():
         for (images, timestamp, labels) in tqdm(test_loader, total=len(test_loader)):
             img_out_mean, lab_out_mean = create_img_and_label_embeddings(flo_model, processor, prompt, images, gt_labels, cfg, debug=debug)
             _, img_to_txt_logits = cross_similarity(img_out_mean, lab_out_mean)
             loss = get_loss(loss_ce, loss_img_to_txt, img_to_txt_logits, img_out_mean, lab_out_mean, labels, cfg)
-            if cfg.option == '1':
-                num, corr_k, labeled_ids, correct_ids = calculate_accuracy_old(img_to_txt_logits, labels)
-            elif cfg.option == '2':
-                num, corr_k, tp, tn, labeled_ids, correct_ids = calculate_accuracy(img_to_txt_logits, labels)
+            labels = labels.to(device=img_to_txt_logits.device)
+            #if cfg.option == '1':
+            #    num, corr_k = calculate_accuracy_old(img_to_txt_logits, labels)
+            #elif cfg.option == '2':
+            num, corr_k, (tp, tn, fp, fn) = calculate_accuracy(img_to_txt_logits, labels, threshold)
             total_num += num
             total_corr += corr_k
-            
+            tp_all += tp; tn_all += tn; fp_all += fp; fn_all += fn;
+
             train_loss += loss.item()
-                
+
             # Two lists of lists where each element of the list is a list of predicted labels and a list of correct labels
             total_labeled_ids.extend(((img_to_txt_logits/torch.sum(img_to_txt_logits, dim=1).unsqueeze(dim=1)) > (1/11 + .01)).to(device='cpu', dtype=torch.float))
             total_correct_ids.extend(labels.tolist())
 
+    f1, mAP = get_metrics(tp_all, tn_all, fp_all, fn_all)
+
     if cfg.print:
         plot_confusion_matrix(total_correct_ids, total_labeled_ids, np.array(gt_labels), cfg.name)
-    
-    print(f'Epoch: [{epoch+1}/{epochs}]: Test Loss: {train_loss/len(test_loader)}, Top1: {total_corr}/{total_num} = {(total_corr/total_num)*100}%')
 
-def train(train_loader, test_loader, flo_model, processor, optimizer, prompt, gt_labels, loss_img_to_txt, loss_ce, lr_scheduler, cfg, debug=False):
-    total_num = 0
-    total_corr = 0
+    print(f'Epoch: [{epoch+1}/{epochs}]: Test Loss: {train_loss/len(test_loader)}, Top1: {torch.sum(tp_all+tn_all)}/{torch.sum(tp_all+tn_all+fn_all+fp_all)} = {(torch.sum(tp_all+tn_all)/torch.sum(tp_all+tn_all+fn_all+fp_all))*100}%, F1: {f1}, mAP: {mAP}')
+    return (torch.sum(tp_all+tn_all)/torch.sum(tp_all+tn_all+fn_all+fp_all))
+
+def train(train_loader, test_loader, flo_model, processor, optimizer, prompt, gt_labels, loss_img_to_txt, loss_ce, lr_scheduler, cfg, threshold, debug=False):
+    best_acc = 0
     for epoch in range(cfg.solver.epochs):
         debug_count = 0
         train_loss = 0
         flo_model.train()
+        total_num = 0
+        total_corr = 0
+        if cfg.debug:
+            model = flo_model
+        else:
+            model = flo_model.module
+        tp_all = torch.zeros(65, device=model.device)
+        tn_all = torch.zeros(65, device=model.device)
+        fn_all = torch.zeros(65, device=model.device)
+        fp_all = torch.zeros(65, device=model.device)
         for kkk, (images, timestamp, labels) in enumerate(tqdm(train_loader, total=len(train_loader))):
             if cfg.solver.schedule and ((kkk+1) == 1 or (kkk+1) % 10 == 0):
                 lr_scheduler.step(epoch + kkk / len(train_loader))
@@ -290,25 +336,39 @@ def train(train_loader, test_loader, flo_model, processor, optimizer, prompt, gt
             _, img_to_txt_logits = cross_similarity(img_out_mean, lab_out_mean)
             # _, txt_to_img_logits = cross_similarity(lab_out_mean, img_out_mean)
             labels = labels.to(device=img_to_txt_logits.device, dtype=torch.float)
-            
-            if cfg.option == '1':
-                num, corr_k, labeled_ids, correct_ids = calculate_accuracy_old(img_to_txt_logits, labels)
-            elif cfg.option == '2':
-                num, corr_k, tp, tn, labeled_ids, correct_ids = calculate_accuracy(img_to_txt_logits, labels)
+
+            #if cfg.option == '1':
+            #    num, corr_k = calculate_accuracy_old(img_to_txt_logits, labels)
+            #elif cfg.option == '2':
+            num, corr_k, (tp, tn, fp, fn) = calculate_accuracy(img_to_txt_logits, labels, threshold)
             total_num += num
             total_corr += corr_k
+            tp_all += tp; tn_all += tn; fn_all += fn; fp_all += fp;
 
             loss = get_loss(loss_ce, loss_img_to_txt, img_to_txt_logits, img_out_mean, lab_out_mean, labels, cfg)
             train_loss += loss.item()
-            
+
             loss.backward()
             optimizer.step()
-        
+
         avg_train_loss = train_loss / len(train_loader)
-        print(f"Average Training Loss: {avg_train_loss}, Accuracy: {total_corr}/{total_num} = {(total_corr/total_num)*100}%")
+        f1, mAP = get_metrics(tp_all, tn_all, fp_all, fn_all)
+        print(f"Average Training Loss: {avg_train_loss}, Accuracy: {torch.sum(tp_all+tn_all)}/{torch.sum(tp_all+tn_all+fn_all+fp_all)} = {(torch.sum(tp_all+tn_all)/torch.sum(tp_all+tn_all+fn_all+fp_all))*100}%, F1: {f1}, mAP: {mAP}")
         if (epoch+1) % cfg.freq == 0:
-            validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, cfg.solver.epochs, loss_img_to_txt, loss_ce, cfg, debug=debug)
-    
+            acc = validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, cfg.solver.epochs, loss_img_to_txt, loss_ce, cfg, threshold, debug=debug)
+
+            # TODO add best model analysis and saving here
+            if acc > best_acc:
+                if cfg.debug:
+                    model = flo_model
+                else:
+                    model = flo_model.modules
+                best_acc = acc
+                print(f'Best accuracy is {best_acc}')
+                # save model here
+                model.save_pretrained(cfg.output_dir)
+                processor.save_pretrained(cfg.output_dir)
+
     flo_model.eval()
     return flo_model
 
@@ -419,7 +479,7 @@ def main():
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
 
     # set up loss functions
     loss_ce = torch.nn.BCEWithLogitsLoss()
@@ -427,7 +487,7 @@ def main():
     loss_txt_to_img = KLLoss()
 
     cfg = DotMap(config)
-    
+
     if cfg.seed is not None:
         seed = int(cfg.seed)
         torch.manual_seed(seed) 
@@ -445,37 +505,44 @@ def main():
         cfg.seed = seed
     print(f'SEED: {seed}')
 
-    print('Load file dictionary...')
-    file_dict, desc_list = load_file_dict(cfg.vid_dir, cfg.annot_dir, stunt=cfg.stunt)
+    if cfg.dataset == 'aiai':
+        print('Load file dictionary...')
+        file_dict, desc_list = load_file_dict(cfg.vid_dir, cfg.annot_dir, stunt=cfg.stunt)
 
-    print('Set up education dataset and test...')
-    
-    # determine the train-test split
-    indices = np.arange(len(desc_list))
-    np.random.shuffle(indices)
-    split_idx = int(.8 * len(indices))
-    train_desc_list = [desc_list[ind] for ind in indices[:split_idx]]
-    test_desc_list = [desc_list[ind] for ind in indices[split_idx:]]
+        print('Set up education dataset and test...')
 
-    edu = EducationDataset(cfg.vid_dir, cfg.annot_dir, file_dict, train_desc_list, transform=transforms.ToTensor(), size=cfg.size, label_defs=cfg.label_defs)
-    edu_test = EducationDataset(cfg.vid_dir, cfg.annot_dir, file_dict, test_desc_list, transform=transforms.ToTensor(), size=cfg.size, label_defs=cfg.label_defs)
-    print(f'There are {len(list(edu.get_file_dict().keys()))} video-eaf pairs')
+        # determine the train-test split
+        indices = np.arange(len(desc_list))
+        np.random.shuffle(indices)
+        split_idx = int(.8 * len(indices))
+        train_desc_list = [desc_list[ind] for ind in indices[:split_idx]]
+        test_desc_list = [desc_list[ind] for ind in indices[split_idx:]]
+
+        dataset_train = EducationDataset(cfg.vid_dir, cfg.annot_dir, file_dict, train_desc_list, transform=transforms.ToTensor(), size=cfg.size, label_defs=cfg.label_defs)
+        dataset_test = EducationDataset(cfg.vid_dir, cfg.annot_dir, file_dict, test_desc_list, transform=transforms.ToTensor(), size=cfg.size, label_defs=cfg.label_defs)
+        print(f'There are {len(list(edu.get_file_dict().keys()))} video-eaf pairs')
+        all_labels = dataset_train.gt_labels
+    elif cfg.dataset == 'multithumos':
+        dataset_train = MultiTHUMOSDataset(dataset_path=cfg.vid_dir, annotations=cfg.annot_dir, stunt=.05, transform=transforms.ToTensor(), train=True, label_csv=cfg.label_defs)
+        dataset_test  = MultiTHUMOSDataset(dataset_path=cfg.vid_dir, annotations=cfg.annot_dir, stunt=.02, transform=transforms.ToTensor(), train=False, label_csv=cfg.label_defs)
+        all_labels = dataset_train.labels
+    else:
+        raise ValueError(f'Unknwon dataset {cfg.dataset}')
 
     def collate_fn(batch):
         image, timestamp, label = zip(*batch)
         # Check the labels for bb
-        image = torch.stack(image) 
+        image = torch.stack(image)
         timestamps = torch.tensor(timestamp)
         labels = pad_sequence(label, batch_first=True, padding_value=-1)
         return image, timestamp, labels
 
-    train_loader = DataLoader( edu, batch_size=cfg.batch_size, num_workers=cfg.workers, shuffle=False, pin_memory=False, drop_last=True,  collate_fn=collate_fn)
-    test_loader = DataLoader( edu_test, batch_size=cfg.batch_size, num_workers=cfg.workers, shuffle=False, pin_memory=False, drop_last=True,  collate_fn=collate_fn)
+    train_loader = DataLoader( dataset_train, batch_size=cfg.batch_size, num_workers=cfg.workers, shuffle=True, pin_memory=False, drop_last=True,  collate_fn=collate_fn)
+    test_loader = DataLoader( dataset_test, batch_size=cfg.batch_size, num_workers=cfg.workers, shuffle=False, pin_memory=False, drop_last=True,  collate_fn=collate_fn)
 
     print(f'There are {len(train_loader)*cfg.batch_size} samples')
     print(f'There are {len(test_loader)*cfg.batch_size} samples')
 
-    
     flo_model, processor = flor2.load("BASE_FT", device, lora=cfg.lora)
     if cfg.debug:
         flo_model = flo_model.to(device)
@@ -485,9 +552,10 @@ def main():
     optimizer = _optimizer(cfg, flo_model, debug=cfg.debug, mode=cfg.solver.mode)
     lr_scheduler = _lr_scheduler(cfg, optimizer)
 
-    validate(test_loader, flo_model, processor, cfg.prompt, edu.gt_labels, -1, cfg.solver.epochs, loss_img_to_txt, loss_ce, cfg, debug=cfg.debug)
+    threshold = (1/len(all_labels)) + .01
+    #validate(test_loader, flo_model, processor, cfg.prompt, all_labels, -1, cfg.solver.epochs, loss_img_to_txt, loss_ce, cfg, threshold, debug=cfg.debug)
 
-    train(train_loader, test_loader, flo_model, processor, optimizer, cfg.prompt, edu.gt_labels, loss_img_to_txt, loss_ce, lr_scheduler, cfg, debug=cfg.debug)
+    train(train_loader, test_loader, flo_model, processor, optimizer, cfg.prompt, all_labels, loss_img_to_txt, loss_ce, lr_scheduler, cfg, threshold, debug=cfg.debug)
 
 if __name__ == '__main__':
     main()
