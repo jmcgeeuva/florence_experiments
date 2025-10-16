@@ -8,7 +8,7 @@
 #   AdamW vs SGD
 #   Loss function infoNCE vs CE vs both (balancing them)
 #   Learning rates and scheduling learning rates
-#   Size of input image (224x224) vs (512x512)
+#   Size of input image (224x224) vs (512x512) vs (768x768)
 
 from src.similarities import cross_similarity
 from src.create_embeddings import create_embeddings as create_label_embeddings
@@ -17,6 +17,7 @@ from src.computations import get_captions, next_word_similarity, calculate_simil
 from src.timestamp_captions import get_timestamp_captions, create_caption_embeddings, get_images, extract_region_and_label_embeddings
 from src.eaf_labels import get_eaf_labels
 from aiai_dataloader.datasets import EducationDataset, load_file_dict
+from thumos_dataloader import MultiTHUMOSDataset
 
 import florence_pytorch.florence.modeling_florence2 as flor2
 import torch
@@ -29,7 +30,6 @@ from torchvision import transforms
 from torch.utils.data import DataLoader
 import torch.optim as optim
 from tqdm import tqdm
-from infonce import SupervisedInfoNCE
 import torch.nn.functional as F
 from typing import Optional
 import matplotlib.pyplot as plt
@@ -71,8 +71,12 @@ def create_embeddings(flo_model, processor, gt_labels, debug=False):
     attention_mask = []
     if not debug:
         flo_model = flo_model.module
-    for label, definition in gt_labels:
+    for labels in gt_labels:
         # Process label
+        if type(labels) == tuple:
+            label, definition = labels
+        else:
+            label = labels
         tokens = processor.tokenizer(label)
         embedding_data.append(torch.tensor(tokens['input_ids'], device=flo_model.device))
         attention_mask.append(torch.tensor(tokens['attention_mask'], device=flo_model.device))
@@ -118,38 +122,38 @@ def create_img_and_label_embeddings(flo_model, processor, prompt, sample, gt_lab
     lab_out_mean = lab_out_state.mean(dim=1)
     return img_out_mean, lab_out_mean
 
-def calculate_accuracy(matrix, labels):
-    num = 0
-    corr_k = 0
-    labeled_ids = []
-    correct_ids = []
-    tp = 0
-    tn = 0
-    for mat, label_list in zip(matrix, labels):
-        mat_list = ((matrix/torch.sum(matrix, dim=1).unsqueeze(dim=1)) > (1/11 + .01)).to(device='cpu', dtype=torch.float)
-        # mat_list = [1.0 if x > 1/len(label_list) else 0.0 for x in mat.tolist()]
-        for pred, label in zip(mat_list, label_list):
-            if label == pred:
-                if label == 1:
-                    tp += 1
-                elif label == 0:
-                    tn += 1
-                corr_k += 1
-            num += 1
-        # find the indices where the gt is truly 1
-        indices = [i for i, x in enumerate(label_list) if x == 1]
-        # Get the top k guesses where k is the length of gt
-        values_k, indices_k = mat.topk(len(indices), dim=-1)
-        labeled_ids.append(indices_k.tolist())
-        correct_ids.append(indices)
+# def calculate_accuracy(matrix, labels):
+#     num = 0
+#     corr_k = 0
+#     labeled_ids = []
+#     correct_ids = []
+#     tp = 0
+#     tn = 0
+#     for mat, label_list in zip(matrix, labels):
+#         mat_list = ((matrix/torch.sum(matrix, dim=1).unsqueeze(dim=1)) > (1/11 + .01)).to(device='cpu', dtype=torch.float)
+#         # mat_list = [1.0 if x > 1/len(label_list) else 0.0 for x in mat.tolist()]
+#         for pred, label in zip(mat_list, label_list):
+#             if label == pred:
+#                 if label == 1:
+#                     tp += 1
+#                 elif label == 0:
+#                     tn += 1
+#                 corr_k += 1
+#             num += 1
+#         # find the indices where the gt is truly 1
+#         indices = [i for i, x in enumerate(label_list) if x == 1]
+#         # Get the top k guesses where k is the length of gt
+#         values_k, indices_k = mat.topk(len(indices), dim=-1)
+#         labeled_ids.append(indices_k.tolist())
+#         correct_ids.append(indices)
         
-    return num, corr_k, tp, tn, labeled_ids, correct_ids
+#     return num, corr_k, tp, tn, labeled_ids, correct_ids
 
-def calculate_accuracy_old(matrix, labels):
+def khot_accuracy(matrix, labels):
     num = 0
     corr_k = 0
-    labeled_ids = []
-    correct_ids = []
+    # labeled_ids = []
+    # correct_ids = []
     for mat, label_list in zip(matrix, labels):
         # find the indices where the gt is truly 1
         indices = [i for i, x in enumerate(label_list) if x == 1]
@@ -159,9 +163,9 @@ def calculate_accuracy_old(matrix, labels):
             if ind in indices_k:
                 corr_k += 1
             num += 1
-        labeled_ids.append(indices_k.tolist())
-        correct_ids.append(indices)
-    return num, corr_k, labeled_ids, correct_ids
+        # labeled_ids.append(indices_k.tolist())
+        # correct_ids.append(indices)
+    return num, corr_k
 
 def contrastive_info_nce(
     batch_embs: torch.Tensor,
@@ -236,13 +240,13 @@ def plot_confusion_matrix(y_true, y_pred, classes, name,
     with open(f'confusion_{name}.txt', 'w') as f:
         f.write(classification_report(y_true,y_pred, target_names=[classname[0].replace('-', '_').replace(' ', '_') for classname in classes]))
 
-def get_loss(loss_ce, loss_img_to_txt, img_to_txt_logits, img_out_mean, lab_out_mean, labels):
+def get_loss(loss_ce, loss_img_to_txt, img_to_txt_logits, img_out_mean, lab_out_mean, labels, config):
     labels = labels.to(device=img_to_txt_logits.device, dtype=torch.float)
     ground_truth = gen_multi_label(labels, img_to_txt_logits.device)
     ce_loss = loss_ce(img_to_txt_logits, labels)
     # info_loss = contrastive_info_nce(batch_embs=img_out_mean, label_embs=lab_out_mean, targets=labels, temperature=0.07)
     # img_to_txt = loss_img_to_txt(img_to_txt_logits, ground_truth)
-    return ce_loss #.6ce_loss+ .4*info_loss
+    return config.loss.ce*ce_loss #.6ce_loss+ .4*info_loss
 
 def validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, epochs, loss_img_to_txt, loss_ce, cfg, debug=False):
     flo_model.eval()
@@ -255,11 +259,11 @@ def validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, epochs
         for (images, timestamp, labels) in tqdm(test_loader, total=len(test_loader)):
             img_out_mean, lab_out_mean = create_img_and_label_embeddings(flo_model, processor, prompt, images, gt_labels, cfg, debug=debug)
             _, img_to_txt_logits = cross_similarity(img_out_mean, lab_out_mean)
-            loss = get_loss(loss_ce, loss_img_to_txt, img_to_txt_logits, img_out_mean, lab_out_mean, labels)
-            if cfg.option == '1':
-                num, corr_k, labeled_ids, correct_ids = calculate_accuracy_old(img_to_txt_logits, labels)
-            elif cfg.option == '2':
-                num, corr_k, tp, tn, labeled_ids, correct_ids = calculate_accuracy(img_to_txt_logits, labels)
+            loss = get_loss(loss_ce, loss_img_to_txt, img_to_txt_logits, img_out_mean, lab_out_mean, labels, cfg)
+            # if cfg.option == '1':
+            num, corr_k = khot_accuracy(img_to_txt_logits, labels)
+            # elif cfg.option == '2':
+            #     num, corr_k, tp, tn, labeled_ids, correct_ids = calculate_accuracy(img_to_txt_logits, labels)
             total_num += num
             total_corr += corr_k
             
@@ -275,6 +279,7 @@ def validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, epochs
     print(f'Epoch: [{epoch+1}/{epochs}]: Test Loss: {train_loss/len(test_loader)}, Top1: {total_corr}/{total_num} = {(total_corr/total_num)*100}%')
 
 def train(train_loader, test_loader, flo_model, processor, optimizer, prompt, gt_labels, loss_img_to_txt, loss_ce, lr_scheduler, cfg, debug=False):
+    best_acc = 0
     for epoch in range(cfg.solver.epochs):
         debug_count = 0
         train_loss = 0
@@ -290,7 +295,7 @@ def train(train_loader, test_loader, flo_model, processor, optimizer, prompt, gt
             # _, txt_to_img_logits = cross_similarity(lab_out_mean, img_out_mean)
             labels = labels.to(device=img_to_txt_logits.device, dtype=torch.float)
 
-            loss = get_loss(loss_ce, loss_img_to_txt, img_to_txt_logits, img_out_mean, lab_out_mean, labels)
+            loss = get_loss(loss_ce, loss_img_to_txt, img_to_txt_logits, img_out_mean, lab_out_mean, labels, cfg)
             train_loss += loss.item()
             
             loss.backward()
@@ -299,7 +304,20 @@ def train(train_loader, test_loader, flo_model, processor, optimizer, prompt, gt
         avg_train_loss = train_loss / len(train_loader)
         print(f"Average Training Loss: {avg_train_loss}")
         if (epoch+1) % cfg.freq == 0:
-            validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, cfg.solver.epochs, loss_img_to_txt, loss_ce, cfg, debug=debug)
+            acc = validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, cfg.solver.epochs, loss_img_to_txt, loss_ce, cfg, debug=debug)
+
+            # TODO add best model analysis and saving here
+            if acc > best_acc:
+                if cfg.debug:
+                    model = flo_model
+                else:
+                    model = flo_model.module
+                best_acc = acc
+                print(f'Best accuracy is {best_acc*100:.2f}%')
+                # save model here
+                model.save_pretrained(cfg.output_dir)
+                processor.save_pretrained(cfg.output_dir)
+
     
     flo_model.eval()
     return flo_model
@@ -438,32 +456,40 @@ def main():
         cfg.seed = seed
     print(f'SEED: {seed}')
 
-    print('Load file dictionary...')
-    file_dict, desc_list = load_file_dict(cfg.vid_dir, cfg.annot_dir, stunt=cfg.stunt)
+    if cfg.dataset == 'aiai':
+        print('Load file dictionary...')
+        file_dict, desc_list = load_file_dict(cfg.vid_dir, cfg.annot_dir, stunt=cfg.stunt)
 
-    print('Set up education dataset and test...')
-    
-    # determine the train-test split
-    indices = np.arange(len(desc_list))
-    np.random.shuffle(indices)
-    split_idx = int(.8 * len(indices))
-    train_desc_list = [desc_list[ind] for ind in indices[:split_idx]]
-    test_desc_list = [desc_list[ind] for ind in indices[split_idx:]]
+        print('Set up education dataset and test...')
+        
+        # determine the train-test split
+        indices = np.arange(len(desc_list))
+        np.random.shuffle(indices)
+        split_idx = int(.8 * len(indices))
+        train_desc_list = [desc_list[ind] for ind in indices[:split_idx]]
+        test_desc_list = [desc_list[ind] for ind in indices[split_idx:]]
 
-    edu = EducationDataset(cfg.vid_dir, cfg.annot_dir, file_dict, train_desc_list, transform=transforms.ToTensor(), size=cfg.size, label_defs=cfg.label_defs)
-    edu_test = EducationDataset(cfg.vid_dir, cfg.annot_dir, file_dict, test_desc_list, transform=transforms.ToTensor(), size=cfg.size, label_defs=cfg.label_defs)
-    print(f'There are {len(list(edu.get_file_dict().keys()))} video-eaf pairs')
+        dataset_train = EducationDataset(cfg.vid_dir, cfg.annot_dir, file_dict, train_desc_list, transform=transforms.ToTensor(), size=cfg.size, label_defs=cfg.label_defs)
+        dataset_test = EducationDataset(cfg.vid_dir, cfg.annot_dir, file_dict, test_desc_list, transform=transforms.ToTensor(), size=cfg.size, label_defs=cfg.label_defs)
+        print(f'There are {len(list(dataset_train.get_file_dict().keys()))} video-eaf pairs')
+        all_labels = dataset_train.gt_labels
+    elif cfg.dataset == 'multithumos':
+        dataset_train = MultiTHUMOSDataset(dataset_path=cfg.vid_dir, annotations=cfg.annot_dir, stunt=.05, transform=transforms.ToTensor(), train=True, label_csv=cfg.label_defs)
+        dataset_test  = MultiTHUMOSDataset(dataset_path=cfg.vid_dir, annotations=cfg.annot_dir, stunt=.02, transform=transforms.ToTensor(), train=False, label_csv=cfg.label_defs)
+        all_labels = dataset_train.labels
+    else:
+        raise ValueError(f'Unknwon dataset {cfg.dataset}')
 
     def collate_fn(batch):
         image, timestamp, label = zip(*batch)
         # Check the labels for bb
-        image = torch.stack(image) 
+        image = torch.stack(image)
         timestamps = torch.tensor(timestamp)
         labels = pad_sequence(label, batch_first=True, padding_value=-1)
         return image, timestamp, labels
 
-    train_loader = DataLoader( edu, batch_size=cfg.batch_size, num_workers=cfg.workers, shuffle=False, pin_memory=False, drop_last=True,  collate_fn=collate_fn)
-    test_loader = DataLoader( edu_test, batch_size=cfg.batch_size, num_workers=cfg.workers, shuffle=False, pin_memory=False, drop_last=True,  collate_fn=collate_fn)
+    train_loader = DataLoader( dataset_train, batch_size=cfg.batch_size, num_workers=cfg.workers, shuffle=False, pin_memory=False, drop_last=True,  collate_fn=collate_fn)
+    test_loader = DataLoader( dataset_test, batch_size=cfg.batch_size, num_workers=cfg.workers, shuffle=False, pin_memory=False, drop_last=True,  collate_fn=collate_fn)
 
     print(f'There are {len(train_loader)*cfg.batch_size} samples')
     print(f'There are {len(test_loader)*cfg.batch_size} samples')
@@ -478,9 +504,9 @@ def main():
     optimizer = _optimizer(cfg, flo_model, debug=cfg.debug, mode=cfg.solver.mode)
     # lr_scheduler = _lr_scheduler(cfg, optimizer)
 
-    validate(test_loader, flo_model, processor, cfg.prompt, edu.gt_labels, -1, cfg.solver.epochs, loss_img_to_txt, loss_ce, cfg, debug=cfg.debug)
+    validate(test_loader, flo_model, processor, cfg.prompt, all_labels, -1, cfg.solver.epochs, loss_img_to_txt, loss_ce, cfg, debug=cfg.debug)
 
-    train(train_loader, test_loader, flo_model, processor, optimizer, cfg.prompt, edu.gt_labels, loss_img_to_txt, loss_ce, None, cfg, debug=cfg.debug)
+    train(train_loader, test_loader, flo_model, processor, optimizer, cfg.prompt, all_labels, loss_img_to_txt, loss_ce, None, cfg, debug=cfg.debug)
 
 if __name__ == '__main__':
     main()
