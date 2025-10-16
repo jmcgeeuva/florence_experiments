@@ -1,17 +1,17 @@
 seed: 777
+dataset: aiai
 vid_dir: "/standard/spencerNSF/NeuralNetworksProjectVideos/314hours/Videos_314 Hours/"
 annot_dir: "/standard/spencerNSF/NeuralNetworksProjectVideos/314hours/Video Annotations_314 Hours/"
 prompt: '<CAPTION>' # '<MORE_DETAILED_CAPTION>'
+output_dir: './ckpt'
 batch_size: 8
 workers: 8
 label_defs: '/scratch/tkg5kq/sandbox/florence_experiments/aiai_dataloader/csv/label_definitions_limited.csv'
-# momentum: 0.9
-# weight_decay: 0.2
 loss:
     ce: 1
     info: 0
     i2t: 0
-option: '1'
+option: '2'
 name: 'test'
 size: 768
 # Parameters
@@ -19,7 +19,7 @@ freeze_fc: True
 lora: False
 # Debugging and printing
 debug: False
-print: False
+print: True
 stunt: .05
 freq: 2
 # Learning rates and optimizers
@@ -27,6 +27,9 @@ solver:
     epochs: 50
     lr: 1.e-5
     mode: 'adamw'
+    # For SGD
+    # momentum: 0.9
+    # weight_decay: 0.2
     type: 'cosine'
     lr_warmup_step: 5
     lr_decay_step: 15
