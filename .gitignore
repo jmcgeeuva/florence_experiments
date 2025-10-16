@@ -21,3 +21,7 @@ image*.png
 
 venv/
 env/
+
+ckpt/**.json
+ckpt/merges.txt
+ckpt/model.safetensors

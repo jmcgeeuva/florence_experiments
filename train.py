@@ -148,6 +148,68 @@ def create_img_and_label_embeddings(flo_model, processor, prompt, sample, gt_lab
 #         correct_ids.append(indices)
         
 #     return num, corr_k, tp, tn, labeled_ids, correct_ids
+# https://fangdahan.medium.com/calculate-mean-average-precision-map-for-multi-label-classification-b082679d31be
+def get_conf_components(matrix, labels, threshold_method='sigmoid', return_corr=False):
+    if threshold_method == 'sigmoid':
+        mat = (F.sigmoid(matrix) > 0.5).to(dtype=torch.float)
+    elif threshold_method == 'average':
+        mat = ((matrix/torch.sum(matrix, dim=1).unsqueeze(dim=1)) > (1/labels.shape[-1] + .01)).to(dtype=torch.float)
+    elif threshold_method == 'khot':
+        indices = [[i for i, x in enumerate(label_list) if x == 1] for label_list in labels]
+        indices_k = [matrix[i].topk(len(index_list), dim=-1)[-1] for i, index_list in enumerate(indices)]
+        pred = []
+        for index_k in indices_k:
+            pred.append(torch.tensor([1 if i in index_k else 0 for i in range(labels.shape[-1])]))
+        mat = torch.stack(pred).to(device=labels.device)
+        # mat = ((matrix/torch.sum(matrix, dim=1).unsqueeze(dim=1)) > (1/labels.shape[-1] + .01)).to(dtype=torch.float)
+    elif threshold_method == 'softmax':
+        mat = (F.softmax(matrix) > 0.5).to(dtype=torch.float)
+    else:
+        raise ValueError(f'No threshold method called {threshold_method}')
+
+    check      = (mat == labels)
+    yhat       = labels.to(dtype=torch.bool)
+    not_check  = torch.logical_not(check)
+    not_yhat   = torch.logical_not(yhat)
+
+    tp = torch.sum(torch.logical_and(yhat,     check).to(dtype=int), dim=0)
+    tn = torch.sum(torch.logical_and(not_yhat, check).to(dtype=int), dim=0)
+    fn = torch.sum(torch.logical_and(yhat,     not_check).to(dtype=int), dim=0)
+    fp = torch.sum(torch.logical_and(not_yhat, not_check).to(dtype=int), dim=0)
+
+    corr_k = torch.sum(check.to(dtype=int))
+    num    = check.shape[0]*check.shape[1]
+
+    if return_corr:
+        assert corr_k == torch.sum(tp + tn)
+        assert num == torch.sum(tp + tn + fp + fn)
+
+        return num, corr_k, (tp, tn, fp, fn), mat
+    else:
+        return tp, tn, fp, fn, mat
+
+def get_metrics(tp, tn, fp, fn):
+    p = tp/(tp+fp+1e-12)
+    r = tp/(tp+fn+1e-12)
+
+    #unique_r, inverse_indices = torch.unique(r, return_inverse=True)
+    #max_p_per_group = torch.zeros_like(unique_r)
+    #max_p_per_group = max_p_per_group.scatter_reduce(0, inverse_indices, p, reduce='amax', include_self=False)
+    #p_new = max_p_per_group[inverse_indices]
+
+    #idx = torch.arange(len(r))
+    #last_occurrence = scatter_last = torch.zeros_like(r, dtype=torch.bool)
+    #scatter_last = scatter_last.to(dtype=inverse_indices.dtype).scatter(0, inverse_indices, idx.to(dtype=inverse_indices.dtype))
+    #mask = (idx == scatter_last[inverse_indices])
+
+    #r_new = r.clone()
+    #r_new[~mask] = 0
+    #keep_mask = mask.int()
+
+    ap = p*r #torch.sum(p_new*keep_mask)/torch.sum(keep_mask)
+    map = ap.mean()
+    f1 = ((2*p*r)/(p+r+1e-12)).mean()
+    return f1, map
 
 def khot_accuracy(matrix, labels):
     num = 0
@@ -252,31 +314,58 @@ def validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, epochs
     flo_model.eval()
     total_num = 0
     total_corr = 0
+    if cfg.debug:
+        device = flo_model.device
+    else:
+        device = flo_model.module.device
+    tp_all = torch.zeros(len(gt_labels), device=device)
+    tn_all = torch.zeros(len(gt_labels), device=device)
+    fp_all = torch.zeros(len(gt_labels), device=device)
+    fn_all = torch.zeros(len(gt_labels), device=device)
     total_labeled_ids = []
     total_correct_ids = []
     train_loss = 0
+    calc_tp = False
+
     with torch.no_grad():
         for (images, timestamp, labels) in tqdm(test_loader, total=len(test_loader)):
             img_out_mean, lab_out_mean = create_img_and_label_embeddings(flo_model, processor, prompt, images, gt_labels, cfg, debug=debug)
             _, img_to_txt_logits = cross_similarity(img_out_mean, lab_out_mean)
             loss = get_loss(loss_ce, loss_img_to_txt, img_to_txt_logits, img_out_mean, lab_out_mean, labels, cfg)
-            # if cfg.option == '1':
-            num, corr_k = khot_accuracy(img_to_txt_logits, labels)
-            # elif cfg.option == '2':
-            #     num, corr_k, tp, tn, labeled_ids, correct_ids = calculate_accuracy(img_to_txt_logits, labels)
+            labels = labels.to(device=img_to_txt_logits.device)
+            if cfg.option == '1':
+                tp, tn, fp, fn, khot_pred = get_conf_components(img_to_txt_logits, labels, threshold_method='khot')
+                tp_all += tp
+                tn_all += tn
+                fp_all += fp
+                fn_all += fn
+                # num, corr_k, labeled_ids, correct_ids = khot_accuracy(img_to_txt_logits, labels, output_ids=True)
+                num, corr_k = khot_accuracy(img_to_txt_logits, labels)
+            elif cfg.option == '2':
+                num, corr_k, (tp, tn, fp, fn), khot_pred = get_conf_components(img_to_txt_logits, labels, return_corr=True)
+
+                tp_all += tp
+                tn_all += tn
+                fp_all += fp
+                fn_all += fn
+                # num, corr_k, tp, tn, labeled_ids, correct_ids = calculate_accuracy(img_to_txt_logits, labels)
             total_num += num
             total_corr += corr_k
             
             train_loss += loss.item()
                 
             # Two lists of lists where each element of the list is a list of predicted labels and a list of correct labels
-            total_labeled_ids.extend(((img_to_txt_logits/torch.sum(img_to_txt_logits, dim=1).unsqueeze(dim=1)) > (1/11 + .01)).to(device='cpu', dtype=torch.float))
+            # total_labeled_ids.extend(((img_to_txt_logits/torch.sum(img_to_txt_logits, dim=1).unsqueeze(dim=1)) > (1/11 + .01)).to(device='cpu', dtype=torch.float))
+            total_labeled_ids.extend(khot_pred.tolist())
             total_correct_ids.extend(labels.tolist())
+
+    f1, mAP = get_metrics(tp_all, tn_all, fp_all, fn_all)
+    print(f'Epoch: [{epoch+1}/{epochs}]: Test Loss: {train_loss/len(test_loader)}, Top1: {total_corr}/{total_num} = {(total_corr/total_num)*100:.2f}%, F1: {f1:.2f}, mAP: {mAP:.2f}')
 
     if cfg.print:
         plot_confusion_matrix(total_correct_ids, total_labeled_ids, np.array(gt_labels), cfg.name)
-    
-    print(f'Epoch: [{epoch+1}/{epochs}]: Test Loss: {train_loss/len(test_loader)}, Top1: {total_corr}/{total_num} = {(total_corr/total_num)*100}%')
+
+    return total_corr/total_num
 
 def train(train_loader, test_loader, flo_model, processor, optimizer, prompt, gt_labels, loss_img_to_txt, loss_ce, lr_scheduler, cfg, debug=False):
     best_acc = 0
@@ -284,6 +373,16 @@ def train(train_loader, test_loader, flo_model, processor, optimizer, prompt, gt
         debug_count = 0
         train_loss = 0
         flo_model.train()
+        total_num = 0
+        total_corr = 0
+        if cfg.debug:
+            device = flo_model.device
+        else:
+            device = flo_model.module.device
+        tp_all = torch.zeros(len(gt_labels), device=device)
+        tn_all = torch.zeros(len(gt_labels), device=device)
+        fn_all = torch.zeros(len(gt_labels), device=device)
+        fp_all = torch.zeros(len(gt_labels), device=device)
         for kkk, (images, timestamp, labels) in enumerate(tqdm(train_loader, total=len(train_loader))):
             # if cfg.schedule:
             #     if (kkk+1) == 1 or (kkk+1) % 10 == 0:
@@ -294,6 +393,21 @@ def train(train_loader, test_loader, flo_model, processor, optimizer, prompt, gt
             _, img_to_txt_logits = cross_similarity(img_out_mean, lab_out_mean)
             # _, txt_to_img_logits = cross_similarity(lab_out_mean, img_out_mean)
             labels = labels.to(device=img_to_txt_logits.device, dtype=torch.float)
+            if cfg.option == '2':
+                num, corr_k, (tp, tn, fp, fn), khot_pred = get_conf_components(img_to_txt_logits, labels, return_corr=True)
+                tp_all += tp
+                tn_all += tn
+                fn_all += fn
+                fp_all += fp
+            elif cfg.option == '1':
+                tp, tn, fp, fn, khot_pred = get_conf_components(img_to_txt_logits, labels, threshold_method='khot')
+                tp_all += tp
+                tn_all += tn
+                fn_all += fn
+                fp_all += fp
+                num, corr_k = khot_accuracy(img_to_txt_logits, labels)
+            total_num += num
+            total_corr += corr_k
 
             loss = get_loss(loss_ce, loss_img_to_txt, img_to_txt_logits, img_out_mean, lab_out_mean, labels, cfg)
             train_loss += loss.item()
@@ -302,7 +416,8 @@ def train(train_loader, test_loader, flo_model, processor, optimizer, prompt, gt
             optimizer.step()
         
         avg_train_loss = train_loss / len(train_loader)
-        print(f"Average Training Loss: {avg_train_loss}")
+        f1, mAP = get_metrics(tp_all, tn_all, fp_all, fn_all)
+        print(f"Average Training Loss: {avg_train_loss}, Accuracy: {total_corr}/{total_num} = {(total_corr/total_num)*100:.2f}%, F1: {f1:.2f}, mAP: {mAP:.2f}")
         if (epoch+1) % cfg.freq == 0:
             acc = validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, cfg.solver.epochs, loss_img_to_txt, loss_ce, cfg, debug=debug)
 
