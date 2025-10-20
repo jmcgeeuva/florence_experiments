@@ -11,5 +11,6 @@ arch=$(python -c "import yaml;print(yaml.safe_load(open('${config}'))['network']
 dataset=$(python -c "import yaml;print(yaml.safe_load(open('${config}'))['data']['dataset'])")
 now=$(date +"%Y%m%d_%H%M%S")
 mkdir -p exp/${type}/${arch}/${dataset}/${now}
-python -u train.py  --config ${config} --log_time $now 2>&1|tee exp/${type}/${arch}/${dataset}/${now}/$now.log
+python -u train.py  --config ${config}  2>&1|tee exp/${type}/${arch}/${dataset}/${now}/$now.log
 # --mail-user=mengmengwang@zju.edu.cn --mail-type=ALL -x node86 
+# --log_time $now

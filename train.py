@@ -1,14 +1,24 @@
 # TODO
+# Notes
+#   Currently only testing at 5% of the data and half of the labels (so the current learning is not trustworthy)
+#   
 # RQ
 #   After training use flo_model.generate and see how the text output looks
 #   Compare MORE_DETAILED_CAPTION, DETAILED_CAPTION, and CAPTION
 #   How are the bounding boxes for the BB prompt?
 #   How does training <CAPTION> effect <DETAILED_CAPTION> or <MORE_DETAILED_CAPTION> and vice versa
+#   If the model has interesting results for caption output after training then how is output of frozen FC compare to non-frozen FC
 # TO TEST
 #   AdamW vs SGD
 #   Loss function infoNCE vs CE vs both (balancing them)
 #   Learning rates and scheduling learning rates
 #   Size of input image (224x224) vs (512x512) vs (768x768)
+#   Test how augmentaiton of the image (even though the model is froze) effects training
+#       - Horizontal flip
+#       - Black and white (gray scale)
+#       - Jitter
+#       - I do not know about cropping because if it crops away from the actor how does that help?
+
 
 from src.similarities import cross_similarity
 from src.create_embeddings import create_embeddings as create_label_embeddings
@@ -304,11 +314,16 @@ def plot_confusion_matrix(y_true, y_pred, classes, name,
 
 def get_loss(loss_ce, loss_img_to_txt, img_to_txt_logits, img_out_mean, lab_out_mean, labels, config):
     labels = labels.to(device=img_to_txt_logits.device, dtype=torch.float)
-    ground_truth = gen_multi_label(labels, img_to_txt_logits.device)
+    # BCE Loss
     ce_loss = loss_ce(img_to_txt_logits, labels)
+    
+    # InfoNCE
     # info_loss = contrastive_info_nce(batch_embs=img_out_mean, label_embs=lab_out_mean, targets=labels, temperature=0.07)
-    # img_to_txt = loss_img_to_txt(img_to_txt_logits, ground_truth)
-    return config.loss.ce*ce_loss #.6ce_loss+ .4*info_loss
+    
+    # KLLoss
+    ground_truth = gen_multi_label(labels, img_to_txt_logits.device)
+    img_to_txt = loss_img_to_txt(img_to_txt_logits, ground_truth)
+    return config.loss.ce*ce_loss + config.loss.i2t*img_to_txt
 
 def validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, epochs, loss_img_to_txt, loss_ce, cfg, debug=False):
     flo_model.eval()
@@ -384,9 +399,9 @@ def train(train_loader, test_loader, flo_model, processor, optimizer, prompt, gt
         fn_all = torch.zeros(len(gt_labels), device=device)
         fp_all = torch.zeros(len(gt_labels), device=device)
         for kkk, (images, timestamp, labels) in enumerate(tqdm(train_loader, total=len(train_loader))):
-            # if cfg.schedule:
-            #     if (kkk+1) == 1 or (kkk+1) % 10 == 0:
-            #         lr_scheduler.step(epoch + kkk / len(train_loader))
+            if cfg.schedule:
+                if (kkk+1) == 1 or (kkk+1) % 10 == 0:
+                    lr_scheduler.step(epoch + kkk / len(train_loader))
             optimizer.zero_grad()
 
             img_out_mean, lab_out_mean = create_img_and_label_embeddings(flo_model, processor, prompt, images, gt_labels, cfg, debug=debug)
@@ -437,105 +452,71 @@ def train(train_loader, test_loader, flo_model, processor, optimizer, prompt, gt
     flo_model.eval()
     return flo_model
 
-def get_actions_every_30s(eaf_path, step_ms=30000):
-    """
-    Reads an ELAN .eaf file and returns a list of annotations
-    active at every 30-second interval (or any given step in ms).
-    """
-    eaf = elan.read_eaf(eaf_path)
-    actions_at_steps = []
-
-    # Find the total duration based on all annotations
-    all_ends = [ann.to_ts.ts for tier in eaf for ann in tier]
-    max_ts = max(all_ends) if all_ends else 0
-    max_start = datetime.strptime(max_ts, "%H:%M:%S.%f")
-    milliseconds_max = (max_start.hour * 3600 + max_start.minute * 60 + max_start.second) * 1000 + int(max_start.microsecond / 1000)
-
-    # Loop over every 30-second step
-    for t in range(0, int(milliseconds_max) + step_ms, step_ms):
-        current_actions = []
-        for tier in eaf:
-            for ann in tier:
-                # Check if this annotation is active at timestamp t
-                ann_start = ann.from_ts.ts
-                ann_end = ann.to_ts.ts
-                ann_end = datetime.strptime(ann_end, "%H:%M:%S.%f")
-                ann_start = datetime.strptime(ann_start, "%H:%M:%S.%f")
-                milliseconds_start = (ann_start.hour * 3600 + ann_start.minute * 60 + ann_start.second) * 1000 + int(ann_start.microsecond / 1000)
-                milliseconds_end = (ann_end.hour * 3600 + ann_end.minute * 60 + ann_end.second) * 1000 + int(ann_end.microsecond / 1000)
-                if milliseconds_start <= t <= milliseconds_end:
-                    current_actions.append({
-                        "tier": tier.ID,
-                        "start": ann.from_ts.ts,
-                        "end": ann.to_ts.ts,
-                        "text": ann.text
-                    })
-
-        actions = [t['tier'] for i, t in enumerate(current_actions) if (i != 0 and t['tier'] not in ['Student Location', 'Representing Content'] and t['text'] != 'moving')]
-        actions_at_steps.append({
-            "timestamp_ms": t,
-            "actions": actions if actions != [] else ["No Action"]
-        })
-
-    return actions_at_steps
-
 def _optimizer(config, flo_model, debug=False, mode='adamw'):
     if not debug:
-        flo_model = flo_model.module
-    vision_params = list(map(id, flo_model.vision_tower.parameters()))
+        model = flo_model.module
+    else:
+        model = flo_model
+    vision_params = list(map(id, model.vision_tower.parameters()))
     # Freeze weights
     if config.freeze_fc:
-        for layer in flo_model.language_model.model.decoder.layers:
+        for layer in model.language_model.model.decoder.layers:
             for param in layer.fc1.parameters():
                 param.requires_grad = False
             for param in layer.fc2.parameters():
                 param.requires_grad = False
-        for layer in flo_model.language_model.model.encoder.layers:
+        # for layer in flo_model.module.language_model.model.decoder.layers:
+        #     for param in layer.fc1.parameters():
+        #         print(param.requires_grad)
+        #     for param in layer.fc2.parameters():
+        #         print(param.requires_grad)# = False
+        # import pdb; pdb.set_trace()
+        for layer in model.language_model.model.encoder.layers:
             for param in layer.fc1.parameters():
                 param.requires_grad = False
             for param in layer.fc2.parameters():
                 param.requires_grad = False
-    for param in flo_model.vision_tower.parameters():
+    for param in model.vision_tower.parameters():
         param.requires_grad = False
     # Train just the text parameters
-    text_params = filter(lambda p: (id(p) not in vision_params) and p.requires_grad, flo_model.parameters())
+    text_params = filter(lambda p: (id(p) not in vision_params) and p.requires_grad, model.parameters())
     if mode =='adamw':
         optimizer = optim.AdamW(text_params,
                             betas=(0.9, 0.98), lr=config.solver.lr, eps=1e-8,
                             weight_decay=.2)
     elif mode == 'sgd':
         optimizer = optim.SGD(text_params, config.solver.lr, momentum=config.momentum, weight_decay=config.weight_decay)
-    total_params = sum(p.numel() for p in flo_model.parameters())
-    trainable_params = sum(p.numel() for p in flo_model.parameters() if p.requires_grad)
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f'PARAMS: {total_params}, Trainable: {trainable_params}')
     return optimizer
 
-# def _lr_scheduler(cfg,optimizer):
-#     solver = cfg.solver
-#     if solver.type == 'cosine':
-#         lr_scheduler = WarmupCosineAnnealingLR(
-#             optimizer,
-#             cfg.solver.epochs,
-#             warmup_epochs=solver.lr_warmup_step
-#         )
-#     elif solver.type == 'multistep':
-#         if isinstance(solver.lr_decay_step, list):
-#             milestones = solver.lr_decay_step
-#         elif isinstance(solver.lr_decay_step, int):
-#             milestones = [
-#                 solver.lr_decay_step * (i + 1)
-#                 for i in range(cfg.solver.epochs //
-#                                solver.lr_decay_step)]
-#         else:
-#             raise ValueError("error learning rate decay step: {}".format(type(solver.lr_decay_step)))
-#         lr_scheduler = WarmupMultiStepLR(
-#             optimizer,
-#             milestones,
-#             warmup_epochs=solver.lr_warmup_step
-#         )
-#     else:
-#         raise ValueError('Unknown lr scheduler: {}'.format(solver.type))
-#     return lr_scheduler
+def _lr_scheduler(cfg,optimizer):
+    solver = cfg.solver
+    if solver.type == 'cosine':
+        lr_scheduler = WarmupCosineAnnealingLR(
+            optimizer,
+            cfg.solver.epochs,
+            warmup_epochs=solver.lr_warmup_step
+        )
+    elif solver.type == 'multistep':
+        if isinstance(solver.lr_decay_step, list):
+            milestones = solver.lr_decay_step
+        elif isinstance(solver.lr_decay_step, int):
+            milestones = [
+                solver.lr_decay_step * (i + 1)
+                for i in range(cfg.solver.epochs //
+                               solver.lr_decay_step)]
+        else:
+            raise ValueError("error learning rate decay step: {}".format(type(solver.lr_decay_step)))
+        lr_scheduler = WarmupMultiStepLR(
+            optimizer,
+            milestones,
+            warmup_epochs=solver.lr_warmup_step
+        )
+    else:
+        raise ValueError('Unknown lr scheduler: {}'.format(solver.type))
+    return lr_scheduler
 
 def main():
     parser = argparse.ArgumentParser()
@@ -617,11 +598,15 @@ def main():
         flo_model = torch.nn.DataParallel(flo_model).cuda()
 
     optimizer = _optimizer(cfg, flo_model, debug=cfg.debug, mode=cfg.solver.mode)
-    # lr_scheduler = _lr_scheduler(cfg, optimizer)
+    if cfg.solver.schedule:
+        lr_scheduler = _lr_scheduler(cfg, optimizer)
+    else:
+        lr_scheduler = None
 
-    validate(test_loader, flo_model, processor, cfg.prompt, all_labels, -1, cfg.solver.epochs, loss_img_to_txt, loss_ce, cfg, debug=cfg.debug)
+    if cfg.stunt != 1:
+        validate(test_loader, flo_model, processor, cfg.prompt, all_labels, -1, cfg.solver.epochs, loss_img_to_txt, loss_ce, cfg, debug=cfg.debug)
 
-    train(train_loader, test_loader, flo_model, processor, optimizer, cfg.prompt, all_labels, loss_img_to_txt, loss_ce, None, cfg, debug=cfg.debug)
+    train(train_loader, test_loader, flo_model, processor, optimizer, cfg.prompt, all_labels, loss_img_to_txt, loss_ce, lr_scheduler, cfg, debug=cfg.debug)
 
 if __name__ == '__main__':
     main()
