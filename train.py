@@ -29,6 +29,7 @@ from src.eaf_labels import get_eaf_labels
 from aiai_dataloader.datasets import EducationDataset, load_file_dict
 from thumos_dataloader import MultiTHUMOSDataset
 
+from florence_pytorch.florence.modeling_florence2 import Florence2LanguageForConditionalGeneration as FloLanguageModel
 import florence_pytorch.florence.modeling_florence2 as flor2
 import torch
 import random
@@ -50,6 +51,7 @@ from utils.lr_scheduler import WarmupMultiStepLR, WarmupCosineAnnealingLR
 from dotmap import DotMap
 import argparse
 import yaml
+import os
 
 # https://medium.com/@elsayed_mohamed/florence-2-vlm-fine-tuning-on-custom-dataset-3dd231585091
 from transformers import get_scheduler
@@ -76,15 +78,18 @@ def pad_with_preserved_tokens(seqs, start_token=0, end_token=2, pad_value=0):
     padded = torch.cat([start_col, padded_inner, end_col], dim=1)
     return padded
 
-def create_embeddings(flo_model, processor, gt_labels, debug=False):
+def create_embeddings(flo_model, flo_lm, processor, gt_labels, cfg, debug=False):
     embedding_data = []
     attention_mask = []
     if not debug:
         flo_model = flo_model.module
+        flo_lm = flo_lm.module
     for labels in gt_labels:
         # Process label
         if type(labels) == tuple:
             label, definition = labels
+            if cfg.eaf_mode == 'definition':
+                label = definition
         else:
             label = labels
         tokens = processor.tokenizer(label)
@@ -92,21 +97,23 @@ def create_embeddings(flo_model, processor, gt_labels, debug=False):
         attention_mask.append(torch.tensor(tokens['attention_mask'], device=flo_model.device))
 
     input_ids = pad_with_preserved_tokens(embedding_data)
-    inputs_embeds = torch.stack([flo_model.get_input_embeddings()(tensor) for tensor in input_ids])
+    inputs_embeds = torch.stack([flo_lm.get_input_embeddings()(tensor) for tensor in input_ids])
     # 0 to ignore these masked tokens
     attention_mask = pad_with_preserved_tokens(attention_mask, pad_value=0)
     
     return input_ids, inputs_embeds, attention_mask
     
-def create_img_and_label_embeddings(flo_model, processor, prompt, sample, gt_labels, cfg, debug=False):
+def create_img_and_label_embeddings(flo_model, flo_lm, processor, prompt, sample, gt_labels, cfg, debug=False):
     prompts = [prompt for _ in sample]
     samples = [img for img in sample]
     
     # Create prompt/sample inputs
     if not debug:
         model = flo_model.module
+        model_lm = flo_lm.module
     else:
         model = flo_model
+        model_lm = flo_lm
     # import pdb; pdb.set_trace()
     processor.image_processor.do_rescale = False
     processor.image_processor.size = cfg.size
@@ -120,14 +127,15 @@ def create_img_and_label_embeddings(flo_model, processor, prompt, sample, gt_lab
                         output_hidden_states = True)
 
     # Create all label embeddings in a list ordered by label name
-    label_embeddings, label_embeddings_embeds, attention_mask = create_embeddings(flo_model, processor, gt_labels, debug=debug)
+    label_embeddings, label_embeddings_embeds, attention_mask = create_embeddings(flo_model, flo_lm, processor, gt_labels, cfg, debug=debug)
     
-    decoder_label_ids = flor2.shift_tokens_right(label_embeddings.to(dtype=int), model.config.pad_token_id, 0).to(device=model.device, dtype=int)
-    label_out = flo_model(inputs_embeds=label_embeddings_embeds, output_hidden_states=True, attention_mask=attention_mask, decoder_input_ids=decoder_label_ids)
+    # decoder_label_ids = flor2.shift_tokens_right(label_embeddings.to(dtype=int), model.config.pad_token_id, 0).to(device=model.device, dtype=int)
+    # label_out = flo_model(inputs_embeds=label_embeddings_embeds, output_hidden_states=True, attention_mask=attention_mask, decoder_input_ids=decoder_label_ids)
     
 
     img_out_state = img_out.decoder_hidden_states[-1]
-    lab_out_state = label_out.decoder_hidden_states[-1]
+    lab_out_state = label_embeddings_embeds #label_out.decoder_hidden_states[-1]
+    # raise ValueError(lab_out_state.shape, label_embeddings_embeds.shape)
     img_out_mean = img_out_state.mean(dim=1)
     lab_out_mean = lab_out_state.mean(dim=1)
     return img_out_mean, lab_out_mean
@@ -325,7 +333,7 @@ def get_loss(loss_ce, loss_img_to_txt, img_to_txt_logits, img_out_mean, lab_out_
     img_to_txt = loss_img_to_txt(img_to_txt_logits, ground_truth)
     return config.loss.ce*ce_loss + config.loss.i2t*img_to_txt
 
-def validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, epochs, loss_img_to_txt, loss_ce, cfg, debug=False):
+def validate(test_loader, flo_model, flo_lm, processor, prompt, gt_labels, epoch, epochs, loss_img_to_txt, loss_ce, cfg, debug=False):
     flo_model.eval()
     total_num = 0
     total_corr = 0
@@ -344,7 +352,7 @@ def validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, epochs
 
     with torch.no_grad():
         for (images, timestamp, labels) in tqdm(test_loader, total=len(test_loader)):
-            img_out_mean, lab_out_mean = create_img_and_label_embeddings(flo_model, processor, prompt, images, gt_labels, cfg, debug=debug)
+            img_out_mean, lab_out_mean = create_img_and_label_embeddings(flo_model, flo_lm, processor, prompt, images, gt_labels, cfg, debug=debug)
             _, img_to_txt_logits = cross_similarity(img_out_mean, lab_out_mean)
             loss = get_loss(loss_ce, loss_img_to_txt, img_to_txt_logits, img_out_mean, lab_out_mean, labels, cfg)
             labels = labels.to(device=img_to_txt_logits.device)
@@ -377,12 +385,10 @@ def validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, epochs
     f1, mAP = get_metrics(tp_all, tn_all, fp_all, fn_all)
     print(f'Epoch: [{epoch+1}/{epochs}]: Test Loss: {train_loss/len(test_loader)}, Top1: {total_corr}/{total_num} = {(total_corr/total_num)*100:.2f}%, F1: {f1:.2f}, mAP: {mAP:.2f}')
 
-    if cfg.print:
-        plot_confusion_matrix(total_correct_ids, total_labeled_ids, np.array(gt_labels), cfg.name)
 
-    return total_corr/total_num
+    return total_corr/total_num, total_correct_ids, total_labeled_ids
 
-def train(train_loader, test_loader, flo_model, processor, optimizer, prompt, gt_labels, loss_img_to_txt, loss_ce, lr_scheduler, cfg, debug=False):
+def train(train_loader, test_loader, flo_model, flo_lm, processor, optimizer, prompt, gt_labels, loss_img_to_txt, loss_ce, lr_scheduler, cfg, debug=False):
     best_acc = 0
     for epoch in range(cfg.solver.epochs):
         debug_count = 0
@@ -404,7 +410,7 @@ def train(train_loader, test_loader, flo_model, processor, optimizer, prompt, gt
                     lr_scheduler.step(epoch + kkk / len(train_loader))
             optimizer.zero_grad()
 
-            img_out_mean, lab_out_mean = create_img_and_label_embeddings(flo_model, processor, prompt, images, gt_labels, cfg, debug=debug)
+            img_out_mean, lab_out_mean = create_img_and_label_embeddings(flo_model, flo_lm, processor, prompt, images, gt_labels, cfg, debug=debug)
             _, img_to_txt_logits = cross_similarity(img_out_mean, lab_out_mean)
             # _, txt_to_img_logits = cross_similarity(lab_out_mean, img_out_mean)
             labels = labels.to(device=img_to_txt_logits.device, dtype=torch.float)
@@ -434,7 +440,7 @@ def train(train_loader, test_loader, flo_model, processor, optimizer, prompt, gt
         f1, mAP = get_metrics(tp_all, tn_all, fp_all, fn_all)
         print(f"Average Training Loss: {avg_train_loss}, Accuracy: {total_corr}/{total_num} = {(total_corr/total_num)*100:.2f}%, F1: {f1:.2f}, mAP: {mAP:.2f}")
         if (epoch+1) % cfg.freq == 0:
-            acc = validate(test_loader, flo_model, processor, prompt, gt_labels, epoch, cfg.solver.epochs, loss_img_to_txt, loss_ce, cfg, debug=debug)
+            acc, total_correct_ids, total_labeled_ids = validate(test_loader, flo_model, flo_lm, processor, prompt, gt_labels, epoch, cfg.solver.epochs, loss_img_to_txt, loss_ce, cfg, debug=debug)
 
             # TODO add best model analysis and saving here
             if acc > best_acc:
@@ -444,19 +450,26 @@ def train(train_loader, test_loader, flo_model, processor, optimizer, prompt, gt
                     model = flo_model.module
                 best_acc = acc
                 print(f'Best accuracy is {best_acc*100:.2f}%')
+                
+                # Only print when it is the best accuracy
+                if cfg.print:
+                    plot_confusion_matrix(total_correct_ids, total_labeled_ids, np.array(gt_labels), cfg.name)
                 # save model here
                 model.save_pretrained(cfg.output_dir)
                 processor.save_pretrained(cfg.output_dir)
+                torch.save(flo_lm, os.path.join(cfg.output_dir, "flo_lm.pt"))
 
     
     flo_model.eval()
     return flo_model
 
-def _optimizer(config, flo_model, debug=False, mode='adamw'):
+def _optimizer(config, flo_model, flo_lm, debug=False, mode='adamw'):
     if not debug:
         model = flo_model.module
+        model_lm = flo_lm.module
     else:
         model = flo_model
+        model_lm = flo_lm
     vision_params = list(map(id, model.vision_tower.parameters()))
     # Freeze weights
     if config.freeze_fc:
@@ -481,7 +494,7 @@ def _optimizer(config, flo_model, debug=False, mode='adamw'):
     # Train just the text parameters
     text_params = filter(lambda p: (id(p) not in vision_params) and p.requires_grad, model.parameters())
     if mode =='adamw':
-        optimizer = optim.AdamW(text_params,
+        optimizer = optim.AdamW([{'params': text_params}, {'params': model_lm.parameters()}],
                             betas=(0.9, 0.98), lr=config.solver.lr, eps=1e-8,
                             weight_decay=.2)
     elif mode == 'sgd':
@@ -584,29 +597,39 @@ def main():
         labels = pad_sequence(label, batch_first=True, padding_value=-1)
         return image, timestamp, labels
 
-    train_loader = DataLoader( dataset_train, batch_size=cfg.batch_size, num_workers=cfg.workers, shuffle=False, pin_memory=False, drop_last=True,  collate_fn=collate_fn)
+    train_loader = DataLoader( dataset_train, batch_size=cfg.batch_size, num_workers=cfg.workers, shuffle=True, pin_memory=False, drop_last=True,  collate_fn=collate_fn)
     test_loader = DataLoader( dataset_test, batch_size=cfg.batch_size, num_workers=cfg.workers, shuffle=False, pin_memory=False, drop_last=True,  collate_fn=collate_fn)
 
     print(f'There are {len(train_loader)*cfg.batch_size} samples')
     print(f'There are {len(test_loader)*cfg.batch_size} samples')
 
+    if cfg.ckpt_path is not None:
+        flo_model, processor = flor2.load(None, device, model_path=cfg.ckpt_path, lora=cfg.lora)
+        flo_lm = FloLanguageModel(flo_model.language_model.config)
+        state_dict = torch.load(os.path.join(cfg.ckpt_path, "flo_lm.pt"), map_location=torch.device('cpu'))
+        flo_lm.load_state_dict(state_dict)
+    else:
+        flo_model, processor = flor2.load("BASE_FT", device, lora=cfg.lora)
+        flo_lm = FloLanguageModel(flo_model.language_model.config)
+        flo_lm.load_state_dict(flo_model.language_model.state_dict())
     
-    flo_model, processor = flor2.load("BASE_FT", device, lora=cfg.lora)
     if cfg.debug:
         flo_model = flo_model.to(device)
+        flo_lm = flo_lm.to(device)
     else:
         flo_model = torch.nn.DataParallel(flo_model).cuda()
+        flo_lm = torch.nn.DataParallel(flo_lm).cuda()
 
-    optimizer = _optimizer(cfg, flo_model, debug=cfg.debug, mode=cfg.solver.mode)
+    optimizer = _optimizer(cfg, flo_model, flo_lm, debug=cfg.debug, mode=cfg.solver.mode)
     if cfg.solver.schedule:
         lr_scheduler = _lr_scheduler(cfg, optimizer)
     else:
         lr_scheduler = None
 
-    if cfg.stunt != 1:
-        validate(test_loader, flo_model, processor, cfg.prompt, all_labels, -1, cfg.solver.epochs, loss_img_to_txt, loss_ce, cfg, debug=cfg.debug)
+    if cfg.stunt != 1 and cfg.run_init_validation:
+        validate(test_loader, flo_model, flo_lm, processor, cfg.prompt, all_labels, -1, cfg.solver.epochs, loss_img_to_txt, loss_ce, cfg, debug=cfg.debug)
 
-    train(train_loader, test_loader, flo_model, processor, optimizer, cfg.prompt, all_labels, loss_img_to_txt, loss_ce, lr_scheduler, cfg, debug=cfg.debug)
+    train(train_loader, test_loader, flo_model, flo_lm, processor, optimizer, cfg.prompt, all_labels, loss_img_to_txt, loss_ce, lr_scheduler, cfg, debug=cfg.debug)
 
 if __name__ == '__main__':
     main()

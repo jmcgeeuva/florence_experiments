@@ -1,25 +1,26 @@
+ckpt_path: 
 seed: 777
 dataset: aiai
 vid_dir: "/standard/spencerNSF/NeuralNetworksProjectVideos/314hours/Videos_314 Hours/"
 annot_dir: "/standard/spencerNSF/NeuralNetworksProjectVideos/314hours/Video Annotations_314 Hours/"
 prompt: '<CAPTION>' # '<MORE_DETAILED_CAPTION>'
-output_dir: './ckpt'
+output_dir: './ckpt_caption10'
 batch_size: 16
 workers: 16
-label_defs: '/scratch/tkg5kq/sandbox/tmp/florence_experiments/aiai_dataloader/csv/label_definitions_limited.csv'
+label_defs: '/scratch/tkg5kq/sandbox/tmp/florence_experiments/aiai_dataloader/csv/label_definitions.csv'
 loss:
     ce: 1
     info: 0
     i2t: 0
 option: '1'
-name: 'test50'
+name: 'test_caption10_full'
 size: 768
 # Parameters
 freeze_fc: True
 lora: False
 # Debugging and printing
 debug: False
-print: False
+print: True
 stunt: .1
 freq: 2
 threshold_method: sigmoid
